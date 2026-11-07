@@ -1,0 +1,31 @@
+spring:
+  application:
+    name: ticketflow
+  datasource:
+    url: jdbc:mysql://${DB_HOST:127.0.0.1}:${DB_PORT:3306}/${DB_NAME:ticketflow}?useUnicode=true&characterEncoding=utf8&connectionTimeZone=UTC
+    username: ${DB_USER:root}
+    password: ${DB_PASSWORD}
+  flyway:
+    enabled: false # 本地数据库可能已手动建表；步骤 0 核对基线后启用
+  data:
+    redis:
+      host: ${REDIS_HOST:127.0.0.1}
+      port: ${REDIS_PORT:6379}
+  rabbitmq:
+    host: ${RABBITMQ_HOST:127.0.0.1}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USER:guest}
+    password: ${RABBITMQ_PASSWORD:guest}
+  profiles:
+    active: dev
+server:
+  port: 8080
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: when_authorized
+

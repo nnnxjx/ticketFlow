@@ -1,0 +1,10 @@
+.env
+backend/src/main/resources/application-dev.yml
+**/.env.local
+**/node_modules/
+**/dist/
+**/target/
+.idea/
+.vscode/
+*.log
+

@@ -1,4 +1,4 @@
-package com.ticketflow.service.impl;
+package com.ticketflow.job;
 
 import com.ticketflow.service.IOrderService;
 import org.slf4j.Logger;

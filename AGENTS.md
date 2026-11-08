@@ -15,6 +15,7 @@
 - Spring 依赖使用字段上的 `@Autowired` 注入，不使用构造函数注入。配置值使用字段上的 `@Value`。
 - 新写或修改的代码要有必要的解释性注释，重点说明业务规则、状态转换、并发约束、鉴权边界及不直观的实现原因；不要求逐行注释，避免把代码原样翻译成注释。公共接口和复杂方法优先使用简短 Javadoc。
 - 拦截器集中放在 `interceptor` 包。业务 HTTP API 的登录态检查通过 Spring MVC `AuthInterceptor` 完成，公开路径由 `WebMvcConfig` 明确排除；请求 ID 由 `RequestIdInterceptor` 处理。JWT 签名、签发方和账号状态均须校验；存在过期时间时也要校验。仅本地 dev 配置允许暂时签发不过期令牌。对象级权限仍由业务 Service 校验。首版不编写自定义 Filter，也不配置 Spring Security 过滤器链。新增不经过 Spring MVC 的入口（例如 WebSocket 握手）时需单独实现鉴权，不能假设 MVC 拦截器会覆盖。
+- 定时任务统一放在顶层 `job` 包；任务类只负责触发、批量参数和日志，具体业务状态转换交给 Service。
 - 鉴权请求头使用 `Authorization: <原始 JWT>`，不加 Bearer 前缀。当前用户 ID 通过 `UserContext` 的 `ThreadLocal` 传递，请求完成或异常时必须调用 `remove()` 清理；异步任务不得直接继承该上下文，应显式传递业务身份。
 
 ## 业务边界

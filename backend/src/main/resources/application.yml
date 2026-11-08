@@ -1,4 +1,6 @@
 spring:
+  config:
+    import: optional:classpath:application-local.yml
   application:
     name: ticketflow
   datasource:
@@ -27,6 +29,11 @@ ticketflow:
     expire-enabled: true
   order:
     payment-timeout-minutes: 15
+  ticket:
+    encryption-key: ${TICKET_ENCRYPTION_KEY:}
+    key-ring: ${TICKET_ENCRYPTION_KEYS:}
+    active-key-version: ${TICKET_ACTIVE_KEY_VERSION:1}
+    issue-scan-delay-ms: 5000
 management:
   endpoints:
     web:

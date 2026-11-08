@@ -22,7 +22,7 @@ CREATE TABLE organizer (
   status VARCHAR(16) NOT NULL DEFAULT 'ACTIVE',
   created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
-  KEY idx_organizer_owner (owner_user_id),
+  UNIQUE KEY uk_organizer_owner (owner_user_id),
   CONSTRAINT ck_organizer_status CHECK (status IN ('ACTIVE','DISABLED'))
 ) ENGINE=InnoDB;
 
@@ -64,7 +64,7 @@ CREATE TABLE event (
 CREATE TABLE event_session (
   id BIGINT NOT NULL PRIMARY KEY,
   event_id BIGINT NOT NULL,
-  venue_id BIGINT NULL,
+  venue_id BIGINT NOT NULL,
   sale_mode VARCHAR(16) NOT NULL,
   sale_start DATETIME(3) NOT NULL,
   sale_end DATETIME(3) NOT NULL,

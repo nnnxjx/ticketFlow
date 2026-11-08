@@ -4,7 +4,7 @@
 
 ## 一、首版边界与完成标准
 
-首版包含用户购票端、主办方端、无座票档抢购、指定座位购买、模拟支付、电子票、检票、整单退款、统计和压测。主办方仅有负责人一种后台身份：`organizer.owner_user_id`。一个场次只采用一种购票模式：`GENERAL` 使用 `ticket_tier` 库存；`ASSIGNED` 不使用票档，直接使用 `session_seat` 的价格和状态。真实支付、部分退款、员工权限体系、平台管理端暂不实现。
+首版包含用户购票端、主办方端、无座票档抢购、指定座位购买、模拟支付、电子票、检票、整单退款、统计和压测。主办方仅有负责人一种后台身份，一个用户至多负责一个主办方：`organizer.owner_user_id`。所有场次必须指定场馆。一个场次只采用一种购票模式：`GENERAL` 使用 `ticket_tier` 库存；`ASSIGNED` 不使用票档，直接使用 `session_seat` 的价格和状态。真实支付、部分退款、员工权限体系、平台管理端暂不实现。
 
 每一步完成时都要满足：代码可启动、主要接口有自动化测试、关键失败路径有可复现测试、README 中有手动演示方式。不得把“接口返回成功”当作库存和订单正确性的证明，应检查最终数据库状态。
 
@@ -35,7 +35,7 @@
 
 - 建立 `backend/`（JDK 17 或 21、Spring Boot 3、Spring MVC、Security、MyBatis-Plus、Validation、MySQL 驱动、Flyway、测试依赖）、`frontend-user/`、`frontend-organizer/`（React + TypeScript）。固定版本并提交锁文件。
 - 配置连接本机 MySQL、Redis、RabbitMQ 的默认端口；用 Actuator 健康检查与端口检查确认本地依赖状态。敏感值由环境变量注入。
-- 加入全局异常处理、统一响应、参数校验、请求 ID、基础日志和 `/actuator/health`。定义模块边界：`auth/organizer/event/venue/tier/seat/order/payment/ticket/refund/statistics`。
+- 加入全局异常处理、统一响应、参数校验、请求 ID、基础日志和 `/actuator/health`。后端采用 `controller/service/mapper/dto/vo/entity` 分层；Service 接口直接放 `service`，实现放 `service/impl`；其他层内部按业务分包。
 - README 写明启动前提、环境变量、启动命令和常见故障定位方法。
 
 **完成判定**：新开发者按照 README 能启动本地服务、后端和两个前端；健康检查可用。数据库基线按步骤 0 核对后启用 Flyway。

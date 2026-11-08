@@ -20,6 +20,11 @@ spring:
     active: dev
 server:
   port: 8080
+ticketflow:
+  jwt:
+    secret: ${JWT_SECRET:}
+    ttl-minutes: 120
+    expire-enabled: true
 management:
   endpoints:
     web:

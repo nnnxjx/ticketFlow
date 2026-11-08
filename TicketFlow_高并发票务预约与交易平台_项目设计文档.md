@@ -154,25 +154,20 @@ TicketFlow/
 │   ├── src/main/java/com/ticketflow/
 │   │   ├── common/          # 异常、响应、工具、幂等基础设施
 │   │   ├── config/          # Redis、RabbitMQ、Web、Security
-│   │   ├── auth/            # 登录、鉴权
-│   │   ├── organizer/       # 主办方
-│   │   ├── event/           # 演出、场次
-│   │   ├── tier/            # 票档库存
-│   │   ├── venue/           # 场馆与座位模板
-│   │   ├── seat/            # 场次座位、锁座
-│   │   ├── order/           # 交易订单
-│   │   ├── payment/         # 模拟支付
-│   │   ├── ticket/          # 电子票、检票
-│   │   ├── refund/          # 退款及退票
-│   │   └── statistics/      # 主办方报表
+│   │   ├── controller/      # 接口层，内部按 auth、organizer、event 等业务分包
+│   │   ├── service/         # IXxxService 继承 IService；impl/ 内的实现继承 ServiceImpl
+│   │   ├── mapper/          # MyBatis-Plus 数据访问层，内部按业务分包
+│   │   ├── dto/             # 请求对象，内部按业务分包
+│   │   ├── vo/              # 响应对象，内部按业务分包
+│   │   └── entity/          # 数据库实体，内部按业务分包
 │   └── src/test/
 ├── frontend-user/          # React 用户端
 ├── frontend-organizer/     # React 主办方端
 ├── docs/                   # SQL、时序图、压测报告、API
-└── docker-compose.yml
+└── plan.md
 ```
 
-每个业务模块内部可采用 `controller / service / mapper / entity / dto / vo / enums` 分层。
+Controller、Mapper、DTO、VO、Entity 各层内部按 `auth / organizer / event / order / seat` 等业务继续分包；Service 接口直接放在 `service`，实现类集中放 `service/impl`。跨业务配置与基础类放在 `config`、`common`。
 
 ---
 

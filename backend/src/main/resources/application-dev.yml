@@ -1,0 +1,18 @@
+spring:
+  datasource:
+    url: jdbc:mysql://127.0.0.1:3306/ticketflow?useUnicode=true&characterEncoding=utf8&connectionTimeZone=UTC
+    username: root
+    password: "20232131050"
+  data:
+    redis:
+      host: 127.0.0.1
+      port: 6379
+  rabbitmq:
+    host: 127.0.0.1
+    port: 5672
+    username: guest
+    password: guest
+ticketflow:
+  jwt:
+    secret: "ticketflow-local-dev-key-change-before-sharing-2026"
+    expire-enabled: false

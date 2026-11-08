@@ -1,4 +1,7 @@
-package com.ticketflow.common;
+package com.ticketflow.controller.common;
+
+import com.ticketflow.common.ApiResponse;
+import com.ticketflow.interceptor.RequestIdInterceptor;
 
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -12,6 +15,6 @@ import java.util.Map;
 public class SystemController {
     @GetMapping("/ping")
     public ApiResponse<Map<String, String>> ping(HttpServletRequest request) {
-        return ApiResponse.ok(Map.of("status", "ready"), (String) request.getAttribute(RequestIdFilter.ATTRIBUTE));
+        return ApiResponse.ok(Map.of("status", "ready"), (String) request.getAttribute(RequestIdInterceptor.ATTRIBUTE));
     }
 }

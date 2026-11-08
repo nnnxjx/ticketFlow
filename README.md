@@ -6,6 +6,7 @@
 
 - JDK 17 或 21（本项目编译目标为 Java 17）
 - Maven 3.9+
+- IDE 启用 Lombok 注解处理（若 IDE 无法识别生成的 getter/setter，可重新导入 Maven 并检查 annotation processing 设置）
 - Node.js 20.19+、npm
 - 本机 MySQL 8、Redis、RabbitMQ；默认端口分别为 `3306`、`6379`、`5672`
 - 不需要 Docker
@@ -44,7 +45,9 @@ mvn spring-boot:run
 
 在 IDE 的运行配置中，也可以将 active profiles 设为 `dev`。不启用 `dev` 时，数据库密码仍由 `DB_PASSWORD` 环境变量提供。
 
-验证 `http://127.0.0.1:8080/actuator/health` 和 `http://127.0.0.1:8080/api/v1/system/ping`。后者返回统一响应和 `X-Request-Id`。步骤 2 实现认证前，除健康检查和 ping 外的业务路由默认拒绝访问。
+验证 `http://127.0.0.1:8080/actuator/health` 和 `http://127.0.0.1:8080/api/v1/system/ping`。后者返回统一响应和 `X-Request-Id`。受保护业务接口使用 `Authorization: <原始 JWT>` 请求头，不加 Bearer 前缀。具体接口见[接口文档](./docs/接口文档.md)。
+
+接口文档位于 `http://127.0.0.1:8080/swagger-ui.html`，机器可读文档位于 `http://127.0.0.1:8080/v3/api-docs`。已实现接口列表见[接口文档](./docs/接口文档.md)。
 
 ## 启动两个前端
 
@@ -77,6 +80,9 @@ npm run dev
 - [x] 后端已由用户通过 Maven 导入并启动
 - [ ] 两个前端的依赖安装与构建验证（当前工具环境中的 npm 依赖下载未完成）
 - [ ] 步骤 0 的实际数据库基线核对
-- [ ] 步骤 2 起的业务接口与页面
+- [x] 步骤 3 的演出、场次、票档、场馆和座位配置后端接口代码
+- [ ] 步骤 3 的前端页面与本地数据库联调
+- [ ] 步骤 4 起的交易业务接口与页面
+- [x] 步骤 2 的注册、登录、JWT 鉴权、主办方负责人归属接口与 Swagger 文档代码
 
 本地依赖和构建的实际验证结果以执行环境为准，见开发过程记录或后续提交。

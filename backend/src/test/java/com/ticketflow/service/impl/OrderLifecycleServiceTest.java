@@ -1,0 +1,108 @@
+package com.ticketflow.service.impl;
+
+import com.baomidou.mybatisplus.core.conditions.Wrapper;
+import com.ticketflow.common.AppException;
+import com.ticketflow.common.UserContext;
+import com.ticketflow.entity.order.OrderEntity;
+import com.ticketflow.entity.order.OrderItemEntity;
+import com.ticketflow.entity.order.QuotaEntity;
+import com.ticketflow.entity.tier.TierEntity;
+import com.ticketflow.mapper.order.OrderMapper;
+import com.ticketflow.service.IOrderItemService;
+import com.ticketflow.service.IPaymentService;
+import com.ticketflow.service.IQuotaService;
+import com.ticketflow.service.ITierService;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionStatus;
+import org.springframework.transaction.support.TransactionTemplate;
+
+import java.math.BigDecimal;
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
+
+class OrderLifecycleServiceTest {
+    private final OrderMapper mapper = mock(OrderMapper.class);
+    private final IQuotaService quotas = mock(IQuotaService.class);
+    private final ITierService tiers = mock(ITierService.class);
+    private final IOrderItemService items = mock(IOrderItemService.class);
+    private final IPaymentService payments = mock(IPaymentService.class);
+    private final PlatformTransactionManager manager = mock(PlatformTransactionManager.class);
+    private final TransactionStatus transactionStatus = mock(TransactionStatus.class);
+
+    @AfterEach
+    void clearUser() { UserContext.clear(); }
+
+    @Test
+    void losingCancellationDoesNotReleaseStockOrQuota() {
+        OrderServiceImpl service = service();
+        when(mapper.selectOne(any(Wrapper.class))).thenReturn(order("PENDING_PAYMENT"), order("PAID"));
+        when(mapper.update(isNull(), any(Wrapper.class))).thenReturn(0);
+
+        assertThrows(AppException.class, () -> service.cancel(8L));
+
+        verifyNoInteractions(quotas, tiers, payments);
+        verify(manager).rollback(transactionStatus);
+    }
+
+    @Test
+    void successfulCancellationReleasesEachReservationOnce() {
+        OrderServiceImpl service = service();
+        when(mapper.selectOne(any(Wrapper.class))).thenReturn(order("PENDING_PAYMENT"), order("CANCELLED"));
+        when(mapper.update(isNull(), any(Wrapper.class))).thenReturn(1);
+        when(quotas.update(any(Wrapper.class))).thenReturn(true);
+        when(tiers.update(any(Wrapper.class))).thenReturn(true);
+        when(items.list(org.mockito.ArgumentMatchers.<Wrapper<OrderItemEntity>>any())).thenReturn(List.of());
+
+        assertEquals("CANCELLED", service.cancel(8L).getStatus());
+
+        verify(quotas, times(1)).update(any(Wrapper.class));
+        verify(tiers, times(1)).update(any(Wrapper.class));
+        verifyNoInteractions(payments);
+        verify(manager).commit(transactionStatus);
+    }
+
+    @Test
+    void expiredPaymentCannotWritePaymentRecord() {
+        OrderServiceImpl service = service();
+        when(mapper.selectOne(any(Wrapper.class))).thenReturn(order("PENDING_PAYMENT"));
+        when(mapper.update(isNull(), any(Wrapper.class))).thenReturn(0);
+
+        AppException error = assertThrows(AppException.class, () -> service.pay(8L));
+
+        assertEquals("ORDER_EXPIRED", error.code());
+        verifyNoInteractions(payments, quotas, tiers);
+        verify(manager).commit(transactionStatus);
+    }
+
+    private OrderServiceImpl service() {
+        OrderServiceImpl service = new OrderServiceImpl();
+        ReflectionTestUtils.setField(service, "baseMapper", mapper);
+        ReflectionTestUtils.setField(service, "quotas", quotas);
+        ReflectionTestUtils.setField(service, "tiers", tiers);
+        ReflectionTestUtils.setField(service, "items", items);
+        ReflectionTestUtils.setField(service, "payments", payments);
+        ReflectionTestUtils.setField(service, "transactions", new TransactionTemplate(manager));
+        when(manager.getTransaction(any())).thenReturn(transactionStatus);
+        UserContext.setUserId(7L);
+        return service;
+    }
+
+    private OrderEntity order(String status) {
+        OrderEntity order = new OrderEntity();
+        order.setId(8L);
+        order.setUserId(7L);
+        order.setSessionId(9L);
+        order.setTierId(10L);
+        order.setQuantity(2);
+        order.setAmount(new BigDecimal("200.00"));
+        order.setSaleMode("GENERAL");
+        order.setStatus(status);
+        return order;
+    }
+}

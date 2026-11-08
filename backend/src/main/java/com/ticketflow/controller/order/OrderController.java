@@ -6,6 +6,7 @@ import com.ticketflow.interceptor.RequestIdInterceptor;
 import com.ticketflow.service.IOrderService;
 import com.ticketflow.vo.order.OrderPageView;
 import com.ticketflow.vo.order.OrderView;
+import com.ticketflow.vo.payment.PaymentView;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -38,6 +39,18 @@ public class OrderController {
     public ApiResponse<OrderPageView> mine(@RequestParam(defaultValue = "1") int page,
                                           @RequestParam(defaultValue = "20") int size, HttpServletRequest request) {
         return ok(orders.mine(page, size), request);
+    }
+
+    @PostMapping("/{id}/cancel")
+    @Operation(summary = "取消本人待支付订单")
+    public ApiResponse<OrderView> cancel(@PathVariable long id, HttpServletRequest request) {
+        return ok(orders.cancel(id), request);
+    }
+
+    @PostMapping("/{id}/pay")
+    @Operation(summary = "模拟支付本人待支付订单")
+    public ApiResponse<PaymentView> pay(@PathVariable long id, HttpServletRequest request) {
+        return ok(orders.pay(id), request);
     }
 
     private <T> ApiResponse<T> ok(T data, HttpServletRequest request) {

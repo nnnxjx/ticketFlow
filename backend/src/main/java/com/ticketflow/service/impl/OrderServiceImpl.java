@@ -11,6 +11,8 @@ import com.ticketflow.dto.order.CreateGeneralOrderRequest;
 import com.ticketflow.entity.event.EventEntity;
 import com.ticketflow.entity.order.OrderEntity;
 import com.ticketflow.entity.order.OrderItemEntity;
+import com.ticketflow.entity.order.QuotaEntity;
+import com.ticketflow.entity.payment.PaymentEntity;
 import com.ticketflow.entity.session.SessionEntity;
 import com.ticketflow.entity.tier.TierEntity;
 import com.ticketflow.mapper.order.OrderMapper;
@@ -20,13 +22,17 @@ import com.ticketflow.service.IOrderService;
 import com.ticketflow.service.IQuotaService;
 import com.ticketflow.service.ISessionService;
 import com.ticketflow.service.ITierService;
+import com.ticketflow.service.IPaymentService;
 import com.ticketflow.vo.order.OrderItemView;
 import com.ticketflow.vo.order.OrderPageView;
 import com.ticketflow.vo.order.OrderView;
+import com.ticketflow.vo.payment.PaymentView;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -37,11 +43,13 @@ import java.util.List;
 
 @Service
 public class OrderServiceImpl extends ServiceImpl<OrderMapper, OrderEntity> implements IOrderService {
+    private static final Logger log = LoggerFactory.getLogger(OrderServiceImpl.class);
     @Autowired private ITierService tiers;
     @Autowired private ISessionService sessions;
     @Autowired private IEventService events;
     @Autowired private IQuotaService quotas;
     @Autowired private IOrderItemService items;
+    @Autowired private IPaymentService payments;
     @Autowired private Ids ids;
     @Autowired private TransactionTemplate transactions;
     @Value("${ticketflow.order.payment-timeout-minutes:15}") private long timeoutMinutes;
@@ -160,5 +168,125 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, OrderEntity> impl
         return new OrderView(order.getId(), order.getSessionId(), order.getTierId(), order.getRequestId(),
                 order.getSaleMode(), order.getQuantity(), order.getAmount(), order.getStatus(),
                 order.getExpireAt(), order.getCreatedAt(), itemViews);
+    }
+
+    @Override
+    public OrderView cancel(long orderId) {
+        long userId = UserContext.getUserId();
+        transactions.execute(status -> cancelPending(orderId, userId, false));
+        return detailForUser(orderId, userId);
+    }
+
+    @Override
+    public PaymentView pay(long orderId) {
+        long userId = UserContext.getUserId();
+        transactions.execute(status -> payPending(orderId, userId));
+        OrderEntity order = getOwnedOrder(orderId, userId);
+        if (!"PAID".equals(order.getStatus()) && !"TICKETED".equals(order.getStatus())) {
+            throw paymentConflict(order);
+        }
+        PaymentEntity payment = payments.getOne(new LambdaQueryWrapper<PaymentEntity>()
+                .eq(PaymentEntity::getOrderId, orderId));
+        if (payment == null) throw new IllegalStateException("Paid order has no payment record");
+        return new PaymentView(orderId, payment.getPaymentNo(), payment.getAmount(), payment.getStatus(), payment.getPaidAt());
+    }
+
+    @Override
+    public int closeExpired(int limit) {
+        if (limit < 1 || limit > 500) throw CatalogAccess.invalid("扫描批量不合法");
+        List<OrderEntity> expired = list(new LambdaQueryWrapper<OrderEntity>()
+                .eq(OrderEntity::getStatus, "PENDING_PAYMENT")
+                .apply("expire_at <= UTC_TIMESTAMP(3)")
+                .orderByAsc(OrderEntity::getExpireAt).last("LIMIT " + limit));
+        int closed = 0;
+        for (OrderEntity order : expired) {
+            try {
+                Boolean changed = transactions.execute(status -> cancelPending(order.getId(), order.getUserId(), true));
+                if (Boolean.TRUE.equals(changed)) closed++;
+            } catch (RuntimeException ex) {
+                // 单笔异常不能阻止本轮其他到期订单关单；失败订单下一轮仍可重扫。
+                log.error("Failed to close expired order {}", order.getId(), ex);
+            }
+        }
+        return closed;
+    }
+
+    private boolean cancelPending(long orderId, long userId, boolean expiredOnly) {
+        OrderEntity order = getOwnedOrder(orderId, userId);
+        if (!"PENDING_PAYMENT".equals(order.getStatus())) {
+            if (expiredOnly || "CANCELLED".equals(order.getStatus())) return false;
+            throw CatalogAccess.conflict("只有待支付订单可以取消");
+        }
+        LambdaUpdateWrapper<OrderEntity> transition = new LambdaUpdateWrapper<OrderEntity>()
+                .eq(OrderEntity::getId, orderId).eq(OrderEntity::getUserId, userId)
+                .eq(OrderEntity::getStatus, "PENDING_PAYMENT")
+                .set(OrderEntity::getStatus, "CANCELLED");
+        if (expiredOnly) transition.apply("expire_at <= UTC_TIMESTAMP(3)");
+        // 状态转换成功者才释放库存；与支付并发时只有一方会更新到一行。
+        if (!update(transition)) {
+            if (expiredOnly || "CANCELLED".equals(getOwnedOrder(orderId, userId).getStatus())) return false;
+            throw CatalogAccess.conflict("订单状态已变化");
+        }
+        releaseGeneralReservation(order);
+        return true;
+    }
+
+    private void releaseGeneralReservation(OrderEntity order) {
+        if (!"GENERAL".equals(order.getSaleMode()) || order.getTierId() == null) {
+            throw new IllegalStateException("Unsupported order sale mode");
+        }
+        int quantity = order.getQuantity();
+        // 与建单时保持“限购行 → 票档行”的更新顺序，降低交叉锁导致的死锁概率。
+        if (!quotas.update(new LambdaUpdateWrapper<QuotaEntity>()
+                .eq(QuotaEntity::getUserId, order.getUserId()).eq(QuotaEntity::getTierId, order.getTierId())
+                .ge(QuotaEntity::getActiveQty, quantity)
+                .setSql("active_qty = active_qty - {0}", quantity))) {
+            throw new IllegalStateException("Quota release failed");
+        }
+        if (!tiers.update(new LambdaUpdateWrapper<TierEntity>()
+                .eq(TierEntity::getId, order.getTierId())
+                .setSql("available_stock = available_stock + {0}", quantity))) {
+            throw new IllegalStateException("Stock release failed");
+        }
+    }
+
+    private boolean payPending(long orderId, long userId) {
+        OrderEntity order = getOwnedOrder(orderId, userId);
+        if ("PAID".equals(order.getStatus()) || "TICKETED".equals(order.getStatus())) return false;
+        if (!"PENDING_PAYMENT".equals(order.getStatus())) throw paymentConflict(order);
+        LocalDateTime now = LocalDateTime.now(Clock.systemUTC());
+        if (!update(new LambdaUpdateWrapper<OrderEntity>()
+                .eq(OrderEntity::getId, orderId).eq(OrderEntity::getUserId, userId)
+                .eq(OrderEntity::getStatus, "PENDING_PAYMENT")
+                .apply("expire_at > UTC_TIMESTAMP(3)")
+                .set(OrderEntity::getStatus, "PAID").set(OrderEntity::getPaidAt, now))) {
+            return false;
+        }
+        PaymentEntity payment = new PaymentEntity();
+        payment.setId(ids.next());
+        payment.setOrderId(orderId);
+        payment.setPaymentNo("SIM-" + orderId);
+        payment.setAmount(order.getAmount());
+        payment.setStatus("SUCCEEDED");
+        payment.setPaidAt(now);
+        if (!payments.save(payment)) throw new IllegalStateException("Payment record insert failed");
+        return true;
+    }
+
+    private OrderEntity getOwnedOrder(long orderId, long userId) {
+        OrderEntity order = getOne(new LambdaQueryWrapper<OrderEntity>()
+                .eq(OrderEntity::getId, orderId).eq(OrderEntity::getUserId, userId));
+        if (order == null) throw CatalogAccess.notFound();
+        return order;
+    }
+
+    private AppException paymentConflict(OrderEntity order) {
+        if ("CANCELLED".equals(order.getStatus())) {
+            return new AppException(HttpStatus.CONFLICT, "ORDER_CANCELLED", "订单已取消");
+        }
+        if ("PENDING_PAYMENT".equals(order.getStatus())) {
+            return new AppException(HttpStatus.CONFLICT, "ORDER_EXPIRED", "订单已超过支付时限");
+        }
+        return new AppException(HttpStatus.CONFLICT, "ORDER_NOT_PAYABLE", "订单不可支付");
     }
 }

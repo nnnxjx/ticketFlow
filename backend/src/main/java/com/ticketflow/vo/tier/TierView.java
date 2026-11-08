@@ -13,7 +13,6 @@ public class TierView {
     private final BigDecimal price;
     private final int totalStock;
     private final int availableStock;
-    private final int perOrderLimit;
     private final int perUserLimit;
     private final LocalDateTime saleStart;
     private final LocalDateTime saleEnd;

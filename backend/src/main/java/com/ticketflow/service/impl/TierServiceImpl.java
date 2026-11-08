@@ -110,20 +110,18 @@ public class TierServiceImpl extends ServiceImpl<TierMapper, TierEntity> impleme
     }
 
     private void fill(TierEntity tier, TierRequest request, SessionEntity session) {
-        if (request.getPerUserLimit() < request.getPerOrderLimit()) throw CatalogAccess.invalid("每用户限购不能小于单次限购");
         if (!request.getSaleStart().isBefore(request.getSaleEnd()) || request.getSaleStart().isBefore(session.getSaleStart())
                 || request.getSaleEnd().isAfter(session.getSaleEnd())) throw CatalogAccess.invalid("票档销售时间必须在场次销售窗口内");
         tier.setName(request.getName().trim());
         tier.setPrice(request.getPrice());
         tier.setTotalStock(request.getTotalStock());
         tier.setAvailableStock(request.getTotalStock()); // 草稿阶段尚未产生订单。
-        tier.setPerOrderLimit(request.getPerOrderLimit());
         tier.setPerUserLimit(request.getPerUserLimit());
         tier.setSaleStart(request.getSaleStart());
         tier.setSaleEnd(request.getSaleEnd());
     }
 
     private TierView view(TierEntity t) {
-        return new TierView(t.getId(), t.getSessionId(), t.getName(), t.getPrice(), t.getTotalStock(), t.getAvailableStock(), t.getPerOrderLimit(), t.getPerUserLimit(), t.getSaleStart(), t.getSaleEnd(), t.getStatus());
+        return new TierView(t.getId(), t.getSessionId(), t.getName(), t.getPrice(), t.getTotalStock(), t.getAvailableStock(), t.getPerUserLimit(), t.getSaleStart(), t.getSaleEnd(), t.getStatus());
     }
 }

@@ -89,7 +89,6 @@ CREATE TABLE ticket_tier (
   price DECIMAL(12,2) NOT NULL,
   total_stock INT NOT NULL,
   available_stock INT NULL,
-  per_order_limit INT NOT NULL,
   per_user_limit INT NOT NULL,
   sale_start DATETIME(3) NOT NULL,
   sale_end DATETIME(3) NOT NULL,
@@ -100,7 +99,7 @@ CREATE TABLE ticket_tier (
   KEY idx_tier_session_sale (session_id,status,sale_start,sale_end),
   CONSTRAINT ck_tier_stock CHECK (total_stock >= 0 AND (available_stock IS NULL OR available_stock BETWEEN 0 AND total_stock)),
   CONSTRAINT ck_tier_price CHECK (price >= 0),
-  CONSTRAINT ck_tier_limits CHECK (per_order_limit > 0 AND per_user_limit >= per_order_limit),
+  CONSTRAINT ck_tier_limits CHECK (per_user_limit > 0),
   CONSTRAINT ck_tier_window CHECK (sale_start < sale_end),
   CONSTRAINT ck_tier_status CHECK (status IN ('DRAFT','ON_SALE','STOPPED'))
 ) ENGINE=InnoDB;

@@ -18,7 +18,6 @@ public class TierEntity {
     private BigDecimal price;
     private Integer totalStock;
     private Integer availableStock;
-    private Integer perOrderLimit;
     private Integer perUserLimit;
     private LocalDateTime saleStart;
     private LocalDateTime saleEnd;

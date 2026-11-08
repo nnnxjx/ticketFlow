@@ -25,6 +25,8 @@ ticketflow:
     secret: ${JWT_SECRET:}
     ttl-minutes: 120
     expire-enabled: true
+  order:
+    payment-timeout-minutes: 15
 management:
   endpoints:
     web:

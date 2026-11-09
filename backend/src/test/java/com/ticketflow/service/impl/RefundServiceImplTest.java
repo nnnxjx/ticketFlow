@@ -6,6 +6,7 @@ import com.ticketflow.common.AsyncStockGate;
 import com.ticketflow.common.UserContext;
 import com.ticketflow.entity.order.OrderEntity;
 import com.ticketflow.entity.order.OrderItemEntity;
+import com.ticketflow.entity.seat.SessionSeatEntity;
 import com.ticketflow.entity.refund.RefundEntity;
 import com.ticketflow.entity.session.SessionEntity;
 import com.ticketflow.entity.ticket.TicketEntity;
@@ -14,6 +15,7 @@ import com.ticketflow.service.IInventoryLogService;
 import com.ticketflow.service.IOrderItemService;
 import com.ticketflow.service.IOrderService;
 import com.ticketflow.service.IQuotaService;
+import com.ticketflow.service.ISeatCatalogService;
 import com.ticketflow.service.ISessionService;
 import com.ticketflow.service.ITicketService;
 import com.ticketflow.service.ITierService;
@@ -40,6 +42,7 @@ class RefundServiceImplTest {
     private final IQuotaService quotas = mock(IQuotaService.class);
     private final ITierService tiers = mock(ITierService.class);
     private final IInventoryLogService inventoryLogs = mock(IInventoryLogService.class);
+    private final ISeatCatalogService seats = mock(ISeatCatalogService.class);
     private final PlatformTransactionManager manager = mock(PlatformTransactionManager.class);
     private final TransactionStatus transactionStatus = mock(TransactionStatus.class);
 
@@ -143,6 +146,37 @@ class RefundServiceImplTest {
         verifyNoInteractions(inventoryLogs);
     }
 
+    @Test
+    void assignedRefundMovesOnlyOwnedSoldSeatWithoutQuotaUpdate() {
+        RefundServiceImpl service = service();
+        RefundEntity processing = new RefundEntity();
+        processing.setId(15L);
+        processing.setOrderId(8L);
+        processing.setStatus("PROCESSING");
+        OrderEntity order = order("REFUNDING");
+        order.setSaleMode("ASSIGNED");
+        order.setTierId(null);
+        OrderItemEntity item = new OrderItemEntity();
+        item.setId(11L);
+        SessionSeatEntity sold = new SessionSeatEntity();
+        sold.setId(20L);
+        sold.setStatus("SOLD");
+        sold.setLockOrderId(8L);
+        when(mapper.selectList(any(Wrapper.class))).thenReturn(List.of(processing));
+        when(mapper.selectById(15L)).thenReturn(processing);
+        when(mapper.update(isNull(), any(Wrapper.class))).thenReturn(1);
+        when(orders.getById(8L)).thenReturn(order);
+        when(orders.update(any(Wrapper.class))).thenReturn(true);
+        when(items.list(org.mockito.ArgumentMatchers.<Wrapper<OrderItemEntity>>any())).thenReturn(List.of(item));
+        when(seats.list(any(Wrapper.class))).thenReturn(List.of(sold));
+        when(seats.update(any(Wrapper.class))).thenReturn(true);
+
+        assertEquals(1, service.settlePending(100));
+
+        verify(seats).update(any(Wrapper.class));
+        verifyNoInteractions(quotas, tiers, inventoryLogs);
+    }
+
     private RefundServiceImpl service() {
         RefundServiceImpl service = new RefundServiceImpl();
         ReflectionTestUtils.setField(service, "baseMapper", mapper);
@@ -152,6 +186,7 @@ class RefundServiceImplTest {
         ReflectionTestUtils.setField(service, "sessions", sessions);
         ReflectionTestUtils.setField(service, "quotas", quotas);
         ReflectionTestUtils.setField(service, "stockGate", mock(AsyncStockGate.class));
+        ReflectionTestUtils.setField(service, "seats", seats);
         ReflectionTestUtils.setField(service, "tiers", tiers);
         ReflectionTestUtils.setField(service, "inventoryLogs", inventoryLogs);
         ReflectionTestUtils.setField(service, "transactions", new TransactionTemplate(manager));

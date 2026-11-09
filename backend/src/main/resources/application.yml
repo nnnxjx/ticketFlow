@@ -32,6 +32,7 @@ ticketflow:
     expire-enabled: true
   order:
     payment-timeout-minutes: 15
+    max-seats-per-order: 8
   ticket:
     encryption-key: ${TICKET_ENCRYPTION_KEY:}
     key-ring: ${TICKET_ENCRYPTION_KEYS:}

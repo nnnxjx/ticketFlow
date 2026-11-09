@@ -14,6 +14,7 @@ import com.ticketflow.entity.order.OrderItemEntity;
 import com.ticketflow.entity.order.QuotaEntity;
 import com.ticketflow.entity.refund.InventoryLogEntity;
 import com.ticketflow.entity.refund.RefundEntity;
+import com.ticketflow.entity.seat.SessionSeatEntity;
 import com.ticketflow.entity.session.SessionEntity;
 import com.ticketflow.entity.ticket.TicketEntity;
 import com.ticketflow.entity.tier.TierEntity;
@@ -24,6 +25,7 @@ import com.ticketflow.service.IOrderItemService;
 import com.ticketflow.service.IOrderService;
 import com.ticketflow.service.IQuotaService;
 import com.ticketflow.service.IRefundService;
+import com.ticketflow.service.ISeatCatalogService;
 import com.ticketflow.service.ISessionService;
 import com.ticketflow.service.ITicketService;
 import com.ticketflow.service.ITierService;
@@ -50,6 +52,7 @@ public class RefundServiceImpl extends ServiceImpl<RefundMapper, RefundEntity> i
     @Autowired private IEventService events;
     @Autowired private IQuotaService quotas;
     @Autowired private IInventoryLogService inventoryLogs;
+    @Autowired private ISeatCatalogService seats;
     @Autowired private AsyncStockGate stockGate;
     @Autowired private Ids ids;
     @Autowired private TransactionTemplate transactions;
@@ -110,7 +113,9 @@ public class RefundServiceImpl extends ServiceImpl<RefundMapper, RefundEntity> i
         if (!"PAID".equals(order.getStatus()) && !"TICKETED".equals(order.getStatus())) {
             throw CatalogAccess.conflict("只有已支付或已出票订单可以退款");
         }
-        if (!"GENERAL".equals(order.getSaleMode())) throw CatalogAccess.conflict("当前仅支持无座订单退款");
+        if (!"GENERAL".equals(order.getSaleMode()) && !"ASSIGNED".equals(order.getSaleMode())) {
+            throw CatalogAccess.conflict("订单销售模式不支持退款");
+        }
         SessionEntity session = sessions.getById(order.getSessionId());
         if (session == null) throw CatalogAccess.notFound();
         if (!LocalDateTime.now(Clock.systemUTC()).isBefore(session.getStartTime().minusHours(cutoffHours))) {
@@ -134,8 +139,10 @@ public class RefundServiceImpl extends ServiceImpl<RefundMapper, RefundEntity> i
         int completed = 0;
         for (RefundEntity refund : pending) {
             try {
-                if (Boolean.TRUE.equals(transactions.execute(status -> settleOne(refund.getId())))) completed++;
-                creditSettledRefund(refund.getId());
+                if (Boolean.TRUE.equals(transactions.execute(status -> settleOne(refund.getId())))) {
+                    completed++;
+                    creditSettledRefund(refund.getId());
+                }
             } catch (RuntimeException ex) {
                 log.error("Refund settlement failed for refund {}", refund.getId(), ex);
             }
@@ -161,10 +168,41 @@ public class RefundServiceImpl extends ServiceImpl<RefundMapper, RefundEntity> i
         if (!orders.update(new LambdaUpdateWrapper<OrderEntity>()
                 .eq(OrderEntity::getId, order.getId()).eq(OrderEntity::getStatus, "REFUNDING")
                 .set(OrderEntity::getStatus, "REFUNDED"))) throw new IllegalStateException("Refund order transition failed");
-        releaseQuota(order);
-        boolean restock = canResell(order);
-        if (restock) restoreStock(refund, order);
+        if ("GENERAL".equals(order.getSaleMode())) {
+            releaseQuota(order);
+            if (canResell(order)) restoreStock(refund, order);
+        } else {
+            restoreAssignedSeats(order);
+        }
         return true;
+    }
+
+    private void restoreAssignedSeats(OrderEntity order) {
+        List<SessionSeatEntity> sold = seats.list(new LambdaQueryWrapper<SessionSeatEntity>()
+                .eq(SessionSeatEntity::getLockOrderId, order.getId()).eq(SessionSeatEntity::getStatus, "SOLD")
+                .orderByAsc(SessionSeatEntity::getId));
+        if (sold.size() != order.getQuantity()) throw new IllegalStateException("Sold seat count mismatch");
+        String next = canResellAssigned(order) ? "FREE" : "UNAVAILABLE";
+        for (SessionSeatEntity seat : sold) {
+            // 只更改仍属于这笔订单的座位；全部更新随退款事务一起提交或回滚。
+            if (!seats.update(new LambdaUpdateWrapper<SessionSeatEntity>()
+                    .eq(SessionSeatEntity::getId, seat.getId()).eq(SessionSeatEntity::getStatus, "SOLD")
+                    .eq(SessionSeatEntity::getLockOrderId, order.getId())
+                    .set(SessionSeatEntity::getStatus, next)
+                    .set(SessionSeatEntity::getLockOrderId, null)
+                    .setSql("version = version + 1"))) {
+                throw new IllegalStateException("Refund seat transition failed");
+            }
+        }
+    }
+
+    private boolean canResellAssigned(OrderEntity order) {
+        SessionEntity session = sessions.getById(order.getSessionId());
+        EventEntity event = session == null ? null : events.getById(session.getEventId());
+        LocalDateTime now = LocalDateTime.now(Clock.systemUTC());
+        return session != null && event != null && "PUBLISHED".equals(event.getStatus())
+                && "ON_SALE".equals(session.getStatus()) && now.isBefore(session.getStartTime())
+                && !now.isBefore(session.getSaleStart()) && now.isBefore(session.getSaleEnd());
     }
 
     private void creditSettledRefund(long refundId) {

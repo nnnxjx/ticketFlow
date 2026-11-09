@@ -10,6 +10,7 @@ import com.ticketflow.entity.order.OrderEntity;
 import com.ticketflow.entity.order.OrderItemEntity;
 import com.ticketflow.entity.order.QuotaEntity;
 import com.ticketflow.entity.refund.InventoryLogEntity;
+import com.ticketflow.entity.seat.SessionSeatEntity;
 import com.ticketflow.entity.session.SessionEntity;
 import com.ticketflow.entity.tier.TierEntity;
 import com.ticketflow.mapper.order.OrderMapper;
@@ -18,6 +19,7 @@ import com.ticketflow.service.IEventService;
 import com.ticketflow.service.IInventoryLogService;
 import com.ticketflow.service.IPaymentService;
 import com.ticketflow.service.IQuotaService;
+import com.ticketflow.service.ISeatCatalogService;
 import com.ticketflow.service.ISessionService;
 import com.ticketflow.service.ITierService;
 import org.junit.jupiter.api.AfterEach;
@@ -46,6 +48,7 @@ class OrderLifecycleServiceTest {
     private final Ids ids = mock(Ids.class);
     private final IOrderItemService items = mock(IOrderItemService.class);
     private final IPaymentService payments = mock(IPaymentService.class);
+    private final ISeatCatalogService seats = mock(ISeatCatalogService.class);
     private final AsyncStockGate stockGate = mock(AsyncStockGate.class);
     private final PlatformTransactionManager manager = mock(PlatformTransactionManager.class);
     private final TransactionStatus transactionStatus = mock(TransactionStatus.class);
@@ -124,11 +127,69 @@ class OrderLifecycleServiceTest {
         verify(manager).commit(transactionStatus);
     }
 
+    @Test
+    void assignedPaymentRollsBackWhenOwnedSeatCannotBecomeSold() {
+        OrderServiceImpl service = service();
+        OrderEntity pending = order("PENDING_PAYMENT");
+        pending.setSaleMode("ASSIGNED");
+        pending.setTierId(null);
+        when(mapper.selectOne(any(Wrapper.class))).thenReturn(pending);
+        when(mapper.update(isNull(), any(Wrapper.class))).thenReturn(1);
+        SessionSeatEntity locked = new SessionSeatEntity();
+        locked.setId(20L);
+        locked.setStatus("LOCKED");
+        locked.setLockOrderId(8L);
+        SessionSeatEntity second = new SessionSeatEntity();
+        second.setId(21L);
+        second.setStatus("LOCKED");
+        second.setLockOrderId(8L);
+        when(seats.list(any(Wrapper.class))).thenReturn(List.of(locked, second));
+        when(seats.update(any(Wrapper.class))).thenReturn(false);
+
+        assertThrows(AppException.class, () -> service.pay(8L));
+
+        verify(seats).update(any(Wrapper.class));
+        verifyNoInteractions(payments);
+        verify(manager).rollback(transactionStatus);
+    }
+
+    @Test
+    void assignedCancellationReleasesOnlyLockedSeats() {
+        OrderServiceImpl service = service();
+        OrderEntity pending = order("PENDING_PAYMENT");
+        pending.setSaleMode("ASSIGNED");
+        pending.setTierId(null);
+        OrderEntity cancelled = order("CANCELLED");
+        cancelled.setSaleMode("ASSIGNED");
+        cancelled.setTierId(null);
+        when(mapper.selectOne(any(Wrapper.class))).thenReturn(pending, cancelled);
+        when(mapper.selectById(8L)).thenReturn(cancelled);
+        when(mapper.update(isNull(), any(Wrapper.class))).thenReturn(1);
+        SessionSeatEntity locked = new SessionSeatEntity();
+        locked.setId(20L);
+        locked.setLockOrderId(8L);
+        locked.setStatus("LOCKED");
+        SessionSeatEntity second = new SessionSeatEntity();
+        second.setId(21L);
+        second.setLockOrderId(8L);
+        second.setStatus("LOCKED");
+        when(seats.list(any(Wrapper.class))).thenReturn(List.of(locked, second));
+        when(seats.update(any(Wrapper.class))).thenReturn(true);
+        when(items.list(org.mockito.ArgumentMatchers.<Wrapper<OrderItemEntity>>any())).thenReturn(List.of());
+
+        assertEquals("CANCELLED", service.cancel(8L).getStatus());
+
+        verify(seats, times(2)).update(any(Wrapper.class));
+        verifyNoInteractions(quotas, tiers, stockGate);
+        verify(manager).commit(transactionStatus);
+    }
+
     private OrderServiceImpl service() {
         OrderServiceImpl service = new OrderServiceImpl();
         ReflectionTestUtils.setField(service, "baseMapper", mapper);
         ReflectionTestUtils.setField(service, "quotas", quotas);
         ReflectionTestUtils.setField(service, "stockGate", stockGate);
+        ReflectionTestUtils.setField(service, "seats", seats);
         ReflectionTestUtils.setField(service, "sessions", sessions);
         ReflectionTestUtils.setField(service, "events", events);
         ReflectionTestUtils.setField(service, "inventoryLogs", inventoryLogs);

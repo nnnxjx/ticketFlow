@@ -9,19 +9,24 @@ import com.ticketflow.common.CatalogAccess;
 import com.ticketflow.common.Ids;
 import com.ticketflow.common.UserContext;
 import com.ticketflow.dto.order.CreateGeneralOrderRequest;
+import com.ticketflow.dto.order.CreateAssignedOrderRequest;
 import com.ticketflow.entity.event.EventEntity;
 import com.ticketflow.entity.order.OrderEntity;
 import com.ticketflow.entity.order.OrderItemEntity;
 import com.ticketflow.entity.order.QuotaEntity;
 import com.ticketflow.entity.payment.PaymentEntity;
 import com.ticketflow.entity.refund.InventoryLogEntity;
+import com.ticketflow.entity.seat.SessionSeatEntity;
 import com.ticketflow.entity.session.SessionEntity;
 import com.ticketflow.entity.tier.TierEntity;
+import com.ticketflow.entity.venue.VenueSeatEntity;
 import com.ticketflow.mapper.order.OrderMapper;
+import com.ticketflow.mapper.venue.VenueSeatMapper;
 import com.ticketflow.service.IEventService;
 import com.ticketflow.service.IInventoryLogService;
 import com.ticketflow.service.IOrderItemService;
 import com.ticketflow.service.IOrderService;
+import com.ticketflow.service.ISeatCatalogService;
 import com.ticketflow.service.IQuotaService;
 import com.ticketflow.service.ISessionService;
 import com.ticketflow.service.ITierService;
@@ -43,6 +48,8 @@ import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.ArrayList;
+import java.util.HashSet;
 
 @Service
 public class OrderServiceImpl extends ServiceImpl<OrderMapper, OrderEntity> implements IOrderService {
@@ -54,10 +61,13 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, OrderEntity> impl
     @Autowired private IOrderItemService items;
     @Autowired private IPaymentService payments;
     @Autowired private IInventoryLogService inventoryLogs;
+    @Autowired private ISeatCatalogService seats;
+    @Autowired private VenueSeatMapper venueSeats;
     @Autowired private AsyncStockGate stockGate;
     @Autowired private Ids ids;
     @Autowired private TransactionTemplate transactions;
     @Value("${ticketflow.order.payment-timeout-minutes:15}") private long timeoutMinutes;
+    @Value("${ticketflow.order.max-seats-per-order:8}") private int maxSeatsPerOrder;
 
     // 旧同步下单实现保留作参考，不再注册到业务接口。
     // public OrderView createGeneral(CreateGeneralOrderRequest request) {
@@ -153,6 +163,108 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, OrderEntity> impl
     }
 
     @Override
+    public OrderView createAssigned(CreateAssignedOrderRequest request) {
+        long userId = UserContext.getUserId();
+        String requestId = request.getRequestId().trim();
+        List<Long> seatIds = checkedSeatIds(request.getSeatIds());
+        OrderEntity existing = findByRequest(userId, requestId);
+        if (existing != null) return repeatedAssigned(existing, request.getSessionId(), seatIds);
+        try {
+            Long orderId = transactions.execute(status -> writeAssignedOrder(userId, requestId, request.getSessionId(), seatIds));
+            if (orderId == null) throw new IllegalStateException("Assigned order transaction returned no ID");
+            return detailForUser(orderId, userId);
+        } catch (DuplicateKeyException ex) {
+            existing = findByRequest(userId, requestId);
+            if (existing == null) throw ex;
+            return repeatedAssigned(existing, request.getSessionId(), seatIds);
+        }
+    }
+
+    private List<Long> checkedSeatIds(List<Long> input) {
+        if (input == null || input.isEmpty() || input.size() > maxSeatsPerOrder || input.contains(null)
+                || input.stream().anyMatch(id -> id <= 0) || new HashSet<>(input).size() != input.size()) {
+            throw CatalogAccess.invalid("选座数量或座位 ID 不合法");
+        }
+        return input.stream().sorted().toList();
+    }
+
+    private OrderView repeatedAssigned(OrderEntity existing, long sessionId, List<Long> seatIds) {
+        if (!"ASSIGNED".equals(existing.getSaleMode()) || existing.getSessionId() != sessionId
+                || existing.getQuantity() != seatIds.size()) throw assignedRequestConflict();
+        List<Long> previous = items.list(new LambdaQueryWrapper<OrderItemEntity>()
+                .eq(OrderItemEntity::getOrderId, existing.getId()))
+                .stream().map(OrderItemEntity::getSessionSeatId).sorted().toList();
+        if (!previous.equals(seatIds)) throw assignedRequestConflict();
+        return detailForUser(existing.getId(), existing.getUserId());
+    }
+
+    private AppException assignedRequestConflict() {
+        return new AppException(HttpStatus.CONFLICT, "REQUEST_ID_CONFLICT", "相同 requestId 的选座参数不同");
+    }
+
+    private long writeAssignedOrder(long userId, String requestId, long sessionId, List<Long> seatIds) {
+        // 锁住场次行，使停售不能与本事务中的锁座交错提交。
+        SessionEntity session = sessions.getOne(new LambdaQueryWrapper<SessionEntity>()
+                .eq(SessionEntity::getId, sessionId).last("FOR UPDATE"));
+        EventEntity event = session == null ? null : events.getById(session.getEventId());
+        LocalDateTime now = LocalDateTime.now(Clock.systemUTC());
+        if (session == null || event == null || !"ASSIGNED".equals(session.getSaleMode())
+                || !"PUBLISHED".equals(event.getStatus()) || !"ON_SALE".equals(session.getStatus())
+                || now.isBefore(session.getSaleStart()) || !now.isBefore(session.getSaleEnd())
+                || !now.isBefore(session.getStartTime())) {
+            throw CatalogAccess.conflict("选座场次当前不可购买");
+        }
+        LocalDateTime expireAt = now.plusMinutes(timeoutMinutes);
+        List<OrderItemEntity> snapshots = new ArrayList<>(seatIds.size());
+        BigDecimal total = BigDecimal.ZERO;
+        OrderEntity order = new OrderEntity();
+        order.setId(ids.next());
+        order.setUserId(userId);
+        order.setSessionId(sessionId);
+        order.setRequestId(requestId);
+        order.setSaleMode("ASSIGNED");
+        order.setQuantity(seatIds.size());
+        order.setStatus("PENDING_PAYMENT");
+        order.setExpireAt(expireAt);
+        // 升序锁座；任何一座失败都抛异常，使全部状态和订单一起回滚。
+        for (Long seatId : seatIds) {
+            SessionSeatEntity seat = seats.getById(seatId);
+            if (seat == null || !Long.valueOf(sessionId).equals(seat.getSessionId()) || !"FREE".equals(seat.getStatus())) {
+                throw new AppException(HttpStatus.CONFLICT, "SEAT_UNAVAILABLE", "座位已被占用或不属于该场次");
+            }
+            VenueSeatEntity template = venueSeats.selectById(seat.getVenueSeatId());
+            if (template == null || !session.getVenueId().equals(template.getVenueId())) {
+                throw CatalogAccess.conflict("场次座位与场馆模板不匹配");
+            }
+            if (!seats.update(new LambdaUpdateWrapper<SessionSeatEntity>()
+                    .eq(SessionSeatEntity::getId, seatId).eq(SessionSeatEntity::getSessionId, sessionId)
+                    .eq(SessionSeatEntity::getStatus, "FREE")
+                    .set(SessionSeatEntity::getStatus, "LOCKED")
+                    .set(SessionSeatEntity::getLockOrderId, order.getId())
+                    .set(SessionSeatEntity::getLockExpireAt, expireAt)
+                    .setSql("version = version + 1"))) {
+                throw new AppException(HttpStatus.CONFLICT, "SEAT_UNAVAILABLE", "座位已被其他订单锁定");
+            }
+            String label = template.getArea() + " " + template.getRowNo() + "排" + template.getSeatNo() + "座";
+            if (label.length() > 160) throw CatalogAccess.invalid("座位位置描述过长");
+            OrderItemEntity item = new OrderItemEntity();
+            item.setId(ids.next());
+            item.setOrderId(order.getId());
+            item.setSessionSeatId(seatId);
+            item.setItemNameSnapshot(label);
+            item.setPriceSnapshot(seat.getPrice());
+            snapshots.add(item);
+            total = total.add(seat.getPrice());
+        }
+        order.setAmount(total);
+        if (!save(order)) throw new IllegalStateException("Assigned order insert failed");
+        for (OrderItemEntity item : snapshots) {
+            if (!items.save(item)) throw new IllegalStateException("Assigned order item insert failed");
+        }
+        return order.getId();
+    }
+
+    @Override
     public OrderView detail(long orderId) { return detailForUser(orderId, UserContext.getUserId()); }
 
     private OrderView detailForUser(long orderId, long userId) {
@@ -161,7 +273,7 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, OrderEntity> impl
         if (order == null) throw CatalogAccess.notFound();
         List<OrderItemView> itemViews = items.list(new LambdaQueryWrapper<OrderItemEntity>()
                 .eq(OrderItemEntity::getOrderId, orderId).orderByAsc(OrderItemEntity::getId))
-                .stream().map(i -> new OrderItemView(i.getId(), i.getItemNameSnapshot(), i.getPriceSnapshot())).toList();
+                .stream().map(i -> new OrderItemView(i.getId(), i.getItemNameSnapshot(), i.getPriceSnapshot(), i.getSessionSeatId())).toList();
         return view(order, itemViews);
     }
 
@@ -263,8 +375,39 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, OrderEntity> impl
             if (expiredOnly || "CANCELLED".equals(getOwnedOrder(orderId, userId).getStatus())) return false;
             throw CatalogAccess.conflict("订单状态已变化");
         }
-        releaseGeneralReservation(order);
+        if ("GENERAL".equals(order.getSaleMode())) releaseGeneralReservation(order);
+        else if ("ASSIGNED".equals(order.getSaleMode())) releaseAssignedSeats(order);
+        else throw new IllegalStateException("Unsupported order sale mode");
         return true;
+    }
+
+    private void releaseAssignedSeats(OrderEntity order) {
+        List<SessionSeatEntity> locked = seats.list(new LambdaQueryWrapper<SessionSeatEntity>()
+                .eq(SessionSeatEntity::getLockOrderId, order.getId()).eq(SessionSeatEntity::getStatus, "LOCKED")
+                .orderByAsc(SessionSeatEntity::getId));
+        if (locked.size() != order.getQuantity()) throw new IllegalStateException("Locked seat count mismatch");
+        String next = canResellAssigned(order) ? "FREE" : "UNAVAILABLE";
+        for (SessionSeatEntity seat : locked) {
+            // 必须同时匹配订单归属；迟到的关单任务不能释放后来被别的订单锁住的座位。
+            if (!seats.update(new LambdaUpdateWrapper<SessionSeatEntity>()
+                    .eq(SessionSeatEntity::getId, seat.getId()).eq(SessionSeatEntity::getStatus, "LOCKED")
+                    .eq(SessionSeatEntity::getLockOrderId, order.getId())
+                    .set(SessionSeatEntity::getStatus, next)
+                    .set(SessionSeatEntity::getLockOrderId, null)
+                    .set(SessionSeatEntity::getLockExpireAt, null)
+                    .setSql("version = version + 1"))) {
+                throw new IllegalStateException("Seat release failed");
+            }
+        }
+    }
+
+    private boolean canResellAssigned(OrderEntity order) {
+        SessionEntity session = sessions.getById(order.getSessionId());
+        EventEntity event = session == null ? null : events.getById(session.getEventId());
+        LocalDateTime now = LocalDateTime.now(Clock.systemUTC());
+        return session != null && event != null && "PUBLISHED".equals(event.getStatus())
+                && "ON_SALE".equals(session.getStatus()) && now.isBefore(session.getStartTime())
+                && !now.isBefore(session.getSaleStart()) && now.isBefore(session.getSaleEnd());
     }
 
     private void releaseGeneralReservation(OrderEntity order) {
@@ -333,6 +476,7 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, OrderEntity> impl
                 .set(OrderEntity::getStatus, "PAID").set(OrderEntity::getPaidAt, now))) {
             return false;
         }
+        if ("ASSIGNED".equals(order.getSaleMode())) sellAssignedSeats(order);
         PaymentEntity payment = new PaymentEntity();
         payment.setId(ids.next());
         payment.setOrderId(orderId);
@@ -342,6 +486,24 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, OrderEntity> impl
         payment.setPaidAt(now);
         if (!payments.save(payment)) throw new IllegalStateException("Payment record insert failed");
         return true;
+    }
+
+    private void sellAssignedSeats(OrderEntity order) {
+        List<SessionSeatEntity> locked = seats.list(new LambdaQueryWrapper<SessionSeatEntity>()
+                .eq(SessionSeatEntity::getLockOrderId, order.getId()).eq(SessionSeatEntity::getStatus, "LOCKED")
+                .orderByAsc(SessionSeatEntity::getId));
+        if (locked.size() != order.getQuantity()) throw new IllegalStateException("Locked seat count mismatch");
+        for (SessionSeatEntity seat : locked) {
+            if (!seats.update(new LambdaUpdateWrapper<SessionSeatEntity>()
+                    .eq(SessionSeatEntity::getId, seat.getId()).eq(SessionSeatEntity::getStatus, "LOCKED")
+                    .eq(SessionSeatEntity::getLockOrderId, order.getId())
+                    .apply("lock_expire_at > UTC_TIMESTAMP(3)")
+                    .set(SessionSeatEntity::getStatus, "SOLD")
+                    .set(SessionSeatEntity::getLockExpireAt, null)
+                    .setSql("version = version + 1"))) {
+                throw CatalogAccess.conflict("座位锁定已过期");
+            }
+        }
     }
 
     private OrderEntity getOwnedOrder(long orderId, long userId) {

@@ -162,7 +162,7 @@ CREATE TABLE ticket_order_item (
   order_id BIGINT NOT NULL,
   tier_id BIGINT NULL,
   session_seat_id BIGINT NULL,
-  item_name_snapshot VARCHAR(80) NOT NULL,
+  item_name_snapshot VARCHAR(160) NOT NULL,
   price_snapshot DECIMAL(12,2) NOT NULL,
   created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   KEY idx_item_seat (session_seat_id),

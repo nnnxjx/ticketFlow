@@ -2,6 +2,7 @@ package com.ticketflow.controller.order;
 
 import com.ticketflow.common.ApiResponse;
 import com.ticketflow.dto.order.CreateGeneralOrderRequest;
+import com.ticketflow.dto.order.CreateAssignedOrderRequest;
 import com.ticketflow.interceptor.RequestIdInterceptor;
 import com.ticketflow.service.IOrderService;
 import com.ticketflow.service.IAsyncOrderService;
@@ -35,6 +36,12 @@ public class OrderController {
     @Operation(summary = "异步受理无座票下单，按 requestId 幂等")
     public ApiResponse<AsyncOrderView> createGeneralAsync(@Valid @RequestBody CreateGeneralOrderRequest body, HttpServletRequest request) {
         return ok(asyncOrders.submit(body), request);
+    }
+
+    @PostMapping("/assigned")
+    @Operation(summary = "指定场次座位下单，全部锁定成功才创建订单")
+    public ApiResponse<OrderView> createAssigned(@Valid @RequestBody CreateAssignedOrderRequest body, HttpServletRequest request) {
+        return ok(orders.createAssigned(body), request);
     }
 
     @GetMapping("/general/async/{requestId}")

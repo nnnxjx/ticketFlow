@@ -10,6 +10,7 @@ import com.ticketflow.vo.event.EventView;
 import com.ticketflow.vo.session.SessionView;
 import com.ticketflow.vo.tier.TierView;
 import com.ticketflow.vo.seat.SeatView;
+import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -36,6 +37,7 @@ public class PublicCatalogController {
     @GetMapping("/sessions/{sessionId}/tiers")
     public ApiResponse<List<TierView>> tiers(@PathVariable long sessionId, HttpServletRequest request) { return ok(tiers.publicList(sessionId), request); }
     @GetMapping("/sessions/{sessionId}/seats")
+    @Operation(summary = "查看选座场次的座位、价格、状态与版本快照")
     public ApiResponse<List<SeatView>> seats(@PathVariable long sessionId, HttpServletRequest request) { return ok(seats.publicList(sessionId), request); }
 
     private <T> ApiResponse<T> ok(T data, HttpServletRequest request) {

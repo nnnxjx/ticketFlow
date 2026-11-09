@@ -56,7 +56,7 @@ public class SeatCatalogServiceImpl extends ServiceImpl<SessionSeatMapper, Sessi
                 seat.setPrice(defaultPrice);
                 seat.setStatus("FREE");
                 seat.setVersion(0L);
-                save(seat);
+                if (!save(seat)) throw new IllegalStateException("Session seat insert failed");
             }
         } catch (DuplicateKeyException ex) { throw CatalogAccess.conflict("场次座位已经初始化"); }
         return mine(sessionId);
@@ -77,6 +77,7 @@ public class SeatCatalogServiceImpl extends ServiceImpl<SessionSeatMapper, Sessi
             throw CatalogAccess.conflict("座位状态或价格已变化");
         }
         seat.setPrice(price);
+        seat.setVersion(seat.getVersion() + 1);
         return view(seat, venueSeats.selectById(seat.getVenueSeatId()));
     }
 
@@ -106,7 +107,7 @@ public class SeatCatalogServiceImpl extends ServiceImpl<SessionSeatMapper, Sessi
 
     private SeatView view(SessionSeatEntity s, VenueSeatEntity template) {
         if (template == null) throw CatalogAccess.conflict("座位模板缺失");
-        return new SeatView(s.getId(), s.getSessionId(), s.getVenueSeatId(), template.getArea(), template.getRowNo(), template.getSeatNo(), s.getPrice(), s.getStatus());
+        return new SeatView(s.getId(), s.getSessionId(), s.getVenueSeatId(), template.getArea(), template.getRowNo(), template.getSeatNo(), s.getPrice(), s.getStatus(), s.getVersion());
     }
 
     private void validatePrice(BigDecimal price) {

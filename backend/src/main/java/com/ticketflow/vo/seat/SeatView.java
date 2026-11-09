@@ -14,4 +14,5 @@ public class SeatView {
     private final String seatNo;
     private final BigDecimal price;
     private final String status;
+    private final long version;
 }

@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.ticketflow.common.CatalogAccess;
 import com.ticketflow.common.Ids;
+import com.ticketflow.common.AsyncStockGate;
 import com.ticketflow.dto.session.SessionRequest;
 import com.ticketflow.entity.event.EventEntity;
 import com.ticketflow.entity.seat.SessionSeatEntity;
@@ -28,6 +29,7 @@ public class SessionServiceImpl extends ServiceImpl<SessionMapper, SessionEntity
     @Autowired private TierMapper tiers;
     @Autowired private SessionSeatMapper seats;
     @Autowired private Ids ids;
+    @Autowired private AsyncStockGate stockGate;
 
     @Override @Transactional
     public SessionView create(long eventId, SessionRequest request) {
@@ -60,13 +62,21 @@ public class SessionServiceImpl extends ServiceImpl<SessionMapper, SessionEntity
 
     @Override @Transactional
     public void delete(long sessionId) {
-        SessionEntity session = access.sessionOwned(sessionId);
+        access.sessionOwned(sessionId);
+        // 与票档启用使用同一场次行锁，避免删除与 Redis 初始化交错。
+        SessionEntity session = getOne(new LambdaQueryWrapper<SessionEntity>()
+                .eq(SessionEntity::getId, sessionId).last("FOR UPDATE"));
+        if (session == null) throw CatalogAccess.notFound();
         if (!"DRAFT".equals(session.getStatus())) {
             throw CatalogAccess.conflict("只能删除草稿场次");
         }
         if (baseMapper.countOrders(sessionId) > 0) throw CatalogAccess.conflict("已有订单的场次不能删除");
+        // 锁定读取最新票档行；普通 SELECT 在 MySQL REPEATABLE READ 下可能仍看到旧快照。
+        List<TierEntity> currentTiers = tiers.selectList(new LambdaQueryWrapper<TierEntity>()
+                .eq(TierEntity::getSessionId, sessionId).orderByAsc(TierEntity::getId).last("FOR UPDATE"));
         // 场次及其票档或座位一并删除；事务失败时全部回滚，避免留下孤儿数据。
         tiers.delete(new LambdaQueryWrapper<TierEntity>().eq(TierEntity::getSessionId, sessionId));
+        for (TierEntity tier : currentTiers) stockGate.removeDraft(tier.getId());
         seats.delete(new LambdaQueryWrapper<SessionSeatEntity>().eq(SessionSeatEntity::getSessionId, sessionId));
         if (!remove(new LambdaQueryWrapper<SessionEntity>().eq(SessionEntity::getId, sessionId).eq(SessionEntity::getStatus, "DRAFT"))) {
             throw CatalogAccess.conflict("场次状态已变化");

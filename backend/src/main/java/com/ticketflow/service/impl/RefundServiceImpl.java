@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.ticketflow.common.AppException;
+import com.ticketflow.common.AsyncStockGate;
 import com.ticketflow.common.CatalogAccess;
 import com.ticketflow.common.Ids;
 import com.ticketflow.common.UserContext;
@@ -49,6 +50,7 @@ public class RefundServiceImpl extends ServiceImpl<RefundMapper, RefundEntity> i
     @Autowired private IEventService events;
     @Autowired private IQuotaService quotas;
     @Autowired private IInventoryLogService inventoryLogs;
+    @Autowired private AsyncStockGate stockGate;
     @Autowired private Ids ids;
     @Autowired private TransactionTemplate transactions;
     @Value("${ticketflow.refund.cutoff-hours:24}") private long cutoffHours;
@@ -133,6 +135,7 @@ public class RefundServiceImpl extends ServiceImpl<RefundMapper, RefundEntity> i
         for (RefundEntity refund : pending) {
             try {
                 if (Boolean.TRUE.equals(transactions.execute(status -> settleOne(refund.getId())))) completed++;
+                creditSettledRefund(refund.getId());
             } catch (RuntimeException ex) {
                 log.error("Refund settlement failed for refund {}", refund.getId(), ex);
             }
@@ -159,8 +162,21 @@ public class RefundServiceImpl extends ServiceImpl<RefundMapper, RefundEntity> i
                 .eq(OrderEntity::getId, order.getId()).eq(OrderEntity::getStatus, "REFUNDING")
                 .set(OrderEntity::getStatus, "REFUNDED"))) throw new IllegalStateException("Refund order transition failed");
         releaseQuota(order);
-        if (canResell(order)) restoreStock(refund, order);
+        boolean restock = canResell(order);
+        if (restock) restoreStock(refund, order);
         return true;
+    }
+
+    private void creditSettledRefund(long refundId) {
+        RefundEntity refund = getById(refundId);
+        if (refund == null || !"SUCCEEDED".equals(refund.getStatus())) return;
+        OrderEntity order = orders.getById(refund.getOrderId());
+        if (order == null) throw new IllegalStateException("Refund order missing: " + refund.getOrderId());
+        if (order.getTierId() == null || !stockGate.isAsyncOrder(order.getUserId(), order.getRequestId())) return;
+        // 有转售库存流水才恢复 Redis 库存；无论能否转售，都释放用户限购占用。
+        boolean restock = inventoryLogs.getOne(new LambdaQueryWrapper<InventoryLogEntity>()
+                .eq(InventoryLogEntity::getOperationId, "REFUND_RESALE:" + refundId)) != null;
+        stockGate.credit(order.getTierId(), order.getUserId(), order.getQuantity(), "REFUND:" + refundId, restock);
     }
 
     private void releaseQuota(OrderEntity order) {

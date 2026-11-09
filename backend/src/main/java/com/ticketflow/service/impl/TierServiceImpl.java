@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.ticketflow.common.CatalogAccess;
 import com.ticketflow.common.Ids;
+import com.ticketflow.common.AsyncStockGate;
 import com.ticketflow.dto.tier.TierRequest;
 import com.ticketflow.entity.session.SessionEntity;
 import com.ticketflow.entity.event.EventEntity;
@@ -26,6 +27,7 @@ public class TierServiceImpl extends ServiceImpl<TierMapper, TierEntity> impleme
     @Autowired private EventMapper events;
     @Autowired private SessionMapper sessions;
     @Autowired private Ids ids;
+    @Autowired private AsyncStockGate stockGate;
 
     @Override @Transactional
     public TierView create(long sessionId, TierRequest request) {
@@ -42,12 +44,14 @@ public class TierServiceImpl extends ServiceImpl<TierMapper, TierEntity> impleme
 
     @Override @Transactional
     public TierView update(long tierId, TierRequest request) {
-        TierEntity tier = access.tierOwned(tierId);
+        access.tierOwned(tierId);
+        TierEntity tier = new TierEntity();
         SessionEntity session = editableSession(tier.getSessionId());
         if (!"DRAFT".equals(tier.getStatus())) throw CatalogAccess.conflict("只有草稿票档可编辑");
         fill(tier, request, session);
         try {
-            if (!update(tier, new LambdaUpdateWrapper<TierEntity>().eq(TierEntity::getId, tierId).eq(TierEntity::getStatus, "DRAFT"))) {
+            if (!update(tier, new LambdaUpdateWrapper<TierEntity>().eq(TierEntity::getId, tierId)
+                    .eq(TierEntity::getStatus, "DRAFT"))) {
                 throw CatalogAccess.conflict("票档状态已变化");
             }
         } catch (DuplicateKeyException ex) { throw CatalogAccess.conflict("该场次已有同名票档"); }
@@ -56,17 +60,32 @@ public class TierServiceImpl extends ServiceImpl<TierMapper, TierEntity> impleme
 
     @Override @Transactional
     public void delete(long tierId) {
-        TierEntity tier = access.tierOwned(tierId);
+        TierEntity tier =access.tierOwned(tierId);
         editableSession(tier.getSessionId());
         if (!"DRAFT".equals(tier.getStatus())) throw CatalogAccess.conflict("只能删除草稿票档");
-        remove(new LambdaQueryWrapper<TierEntity>().eq(TierEntity::getId, tierId).eq(TierEntity::getStatus, "DRAFT"));
+        if (!remove(new LambdaQueryWrapper<TierEntity>().eq(TierEntity::getId, tierId)
+                .eq(TierEntity::getStatus, "DRAFT"))) {
+            throw CatalogAccess.conflict("票档状态已变化");
+        }
+        stockGate.removeDraft(tierId);
     }
 
     @Override @Transactional
     public TierView activate(long tierId) {
         TierEntity tier = access.tierOwned(tierId);
-        editableSession(tier.getSessionId());
-        if (!update(new LambdaUpdateWrapper<TierEntity>().eq(TierEntity::getId, tierId).eq(TierEntity::getStatus, "DRAFT").set(TierEntity::getStatus, "ON_SALE"))) {
+        // 草稿期允许改票档；启用时锁定场次和票档，使用最终库存初始化 Redis。
+        SessionEntity session = sessions.selectOne(new LambdaQueryWrapper<SessionEntity>()
+                .eq(SessionEntity::getId, tier.getSessionId()).last("FOR UPDATE"));
+        if (session == null || !"GENERAL".equals(session.getSaleMode()) || !"DRAFT".equals(session.getStatus())) {
+            throw CatalogAccess.conflict("只能启用不选座草稿场次的票档");
+        }
+        tier = lockedTier(tierId);
+        if (!"DRAFT".equals(tier.getStatus())) throw CatalogAccess.conflict("只有草稿票档可启用");
+        stockGate.initialize(tier);
+        if (!stockGate.ready(tierId)) throw CatalogAccess.conflict("异步库存不可用，请先对账");
+        if (!update(new LambdaUpdateWrapper<TierEntity>().eq(TierEntity::getId, tierId)
+                .eq(TierEntity::getStatus, "DRAFT")
+                .set(TierEntity::getStatus, "ON_SALE"))) {
             throw CatalogAccess.conflict("只有草稿票档可启用");
         }
         tier.setStatus("ON_SALE");
@@ -81,6 +100,13 @@ public class TierServiceImpl extends ServiceImpl<TierMapper, TierEntity> impleme
         }
         tier.setStatus("STOPPED");
         return view(tier);
+    }
+
+    private TierEntity lockedTier(long tierId) {
+        TierEntity tier = getOne(new LambdaQueryWrapper<TierEntity>()
+                .eq(TierEntity::getId, tierId).last("FOR UPDATE"));
+        if (tier == null) throw CatalogAccess.notFound();
+        return tier;
     }
 
     @Override

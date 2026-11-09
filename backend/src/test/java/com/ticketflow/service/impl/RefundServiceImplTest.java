@@ -2,6 +2,7 @@ package com.ticketflow.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.ticketflow.common.AppException;
+import com.ticketflow.common.AsyncStockGate;
 import com.ticketflow.common.UserContext;
 import com.ticketflow.entity.order.OrderEntity;
 import com.ticketflow.entity.order.OrderItemEntity;
@@ -150,6 +151,7 @@ class RefundServiceImplTest {
         ReflectionTestUtils.setField(service, "tickets", tickets);
         ReflectionTestUtils.setField(service, "sessions", sessions);
         ReflectionTestUtils.setField(service, "quotas", quotas);
+        ReflectionTestUtils.setField(service, "stockGate", mock(AsyncStockGate.class));
         ReflectionTestUtils.setField(service, "tiers", tiers);
         ReflectionTestUtils.setField(service, "inventoryLogs", inventoryLogs);
         ReflectionTestUtils.setField(service, "transactions", new TransactionTemplate(manager));

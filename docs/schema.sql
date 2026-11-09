@@ -133,26 +133,6 @@ CREATE TABLE user_tier_quota (
   CONSTRAINT ck_quota_nonnegative CHECK (active_qty >= 0)
 ) ENGINE=InnoDB;
 
-CREATE TABLE purchase_request (
-  id BIGINT NOT NULL PRIMARY KEY,
-  user_id BIGINT NOT NULL,
-  request_id VARCHAR(64) NOT NULL,
-  payload_hash BINARY(32) NOT NULL,
-  tier_id BIGINT NOT NULL,
-  quantity INT NOT NULL,
-  status VARCHAR(16) NOT NULL DEFAULT 'INIT',
-  order_id BIGINT NULL,
-  reservation_expire_at DATETIME(3) NOT NULL,
-  failure_code VARCHAR(64) NULL,
-  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
-  UNIQUE KEY uk_purchase_user_request (user_id,request_id),
-  UNIQUE KEY uk_purchase_order (order_id),
-  KEY idx_purchase_recover (status,updated_at),
-  CONSTRAINT ck_purchase_qty CHECK (quantity > 0),
-  CONSTRAINT ck_purchase_status CHECK (status IN ('INIT','RESERVED','ORDERED','REJECTED','RELEASED'))
-) ENGINE=InnoDB;
-
 CREATE TABLE ticket_order (
   id BIGINT NOT NULL PRIMARY KEY,
   user_id BIGINT NOT NULL,
@@ -261,22 +241,6 @@ CREATE TABLE inventory_log (
   CONSTRAINT ck_inventory_qty CHECK (quantity > 0),
   CONSTRAINT ck_inventory_source CHECK ((tier_id IS NOT NULL AND session_seat_id IS NULL) OR (tier_id IS NULL AND session_seat_id IS NOT NULL)),
   CONSTRAINT ck_inventory_operation CHECK (operation IN ('ORDER_HOLD','ORDER_RELEASE','REFUND_RESALE','SEAT_LOCK','SEAT_RELEASE','SEAT_SOLD','SEAT_RESALE'))
-) ENGINE=InnoDB;
-
-CREATE TABLE outbox_event (
-  id BIGINT NOT NULL PRIMARY KEY,
-  event_type VARCHAR(64) NOT NULL,
-  biz_id BIGINT NOT NULL,
-  payload JSON NOT NULL,
-  status VARCHAR(16) NOT NULL DEFAULT 'NEW',
-  retry_count INT NOT NULL DEFAULT 0,
-  next_retry_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
-  UNIQUE KEY uk_outbox_business (event_type,biz_id),
-  KEY idx_outbox_dispatch (status,next_retry_at),
-  CONSTRAINT ck_outbox_retry CHECK (retry_count >= 0),
-  CONSTRAINT ck_outbox_status CHECK (status IN ('NEW','SENDING','SENT','FAILED'))
 ) ENGINE=InnoDB;
 
 -- 关键事务 SQL 示例（参数由应用绑定）：

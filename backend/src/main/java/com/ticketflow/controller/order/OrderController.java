@@ -4,6 +4,8 @@ import com.ticketflow.common.ApiResponse;
 import com.ticketflow.dto.order.CreateGeneralOrderRequest;
 import com.ticketflow.interceptor.RequestIdInterceptor;
 import com.ticketflow.service.IOrderService;
+import com.ticketflow.service.IAsyncOrderService;
+import com.ticketflow.vo.order.AsyncOrderView;
 import com.ticketflow.vo.order.OrderPageView;
 import com.ticketflow.vo.order.OrderView;
 import com.ticketflow.vo.payment.PaymentView;
@@ -21,11 +23,24 @@ import org.springframework.web.bind.annotation.*;
 @SecurityRequirement(name = "jwtAuth")
 public class OrderController {
     @Autowired private IOrderService orders;
+    @Autowired private IAsyncOrderService asyncOrders;
+
+    // 旧同步 HTTP 入口保留供参考；所有票档购票统一由下面的异步入口处理。
+    // @PostMapping("/general")
+    // public ApiResponse<OrderView> createGeneral(@Valid @RequestBody CreateGeneralOrderRequest body, HttpServletRequest request) {
+    //     return ok(orders.createGeneral(body), request);
+    // }
 
     @PostMapping("/general")
-    @Operation(summary = "无座票同步下单")
-    public ApiResponse<OrderView> createGeneral(@Valid @RequestBody CreateGeneralOrderRequest body, HttpServletRequest request) {
-        return ok(orders.createGeneral(body), request);
+    @Operation(summary = "异步受理无座票下单，按 requestId 幂等")
+    public ApiResponse<AsyncOrderView> createGeneralAsync(@Valid @RequestBody CreateGeneralOrderRequest body, HttpServletRequest request) {
+        return ok(asyncOrders.submit(body), request);
+    }
+
+    @GetMapping("/general/async/{requestId}")
+    @Operation(summary = "查询本人异步下单结果")
+    public ApiResponse<AsyncOrderView> asyncStatus(@PathVariable String requestId, HttpServletRequest request) {
+        return ok(asyncOrders.status(requestId), request);
     }
 
     @GetMapping("/{id}")

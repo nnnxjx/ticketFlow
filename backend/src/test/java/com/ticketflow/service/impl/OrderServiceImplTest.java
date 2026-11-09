@@ -1,6 +1,7 @@
 package com.ticketflow.service.impl;
 
 import com.ticketflow.common.AppException;
+import com.ticketflow.common.AsyncStockGate;
 import com.ticketflow.common.Ids;
 import com.ticketflow.common.UserContext;
 import com.ticketflow.dto.order.CreateGeneralOrderRequest;
@@ -55,6 +56,7 @@ class OrderServiceImplTest {
         ReflectionTestUtils.setField(service, "sessions", sessions);
         ReflectionTestUtils.setField(service, "events", events);
         ReflectionTestUtils.setField(service, "quotas", quotas);
+        ReflectionTestUtils.setField(service, "stockGate", mock(AsyncStockGate.class));
         ReflectionTestUtils.setField(service, "ids", ids);
         ReflectionTestUtils.setField(service, "transactions", new TransactionTemplate(manager));
         ReflectionTestUtils.setField(service, "timeoutMinutes", 15L);
@@ -77,7 +79,8 @@ class OrderServiceImplTest {
         when(orders.selectOne(any())).thenReturn(existing);
 
         CreateGeneralOrderRequest request = request("retry-1", 3L, 2);
-        AppException error = assertThrows(AppException.class, () -> service.createGeneral(request));
+        AppException error = assertThrows(AppException.class,
+                () -> service.createAsync(7L, request.getRequestId(), request.getTierId(), request.getQuantity()));
         assertEquals("REQUEST_ID_CONFLICT", error.code());
         verifyNoInteractions(tiers, quotas);
         verifyNoInteractions(manager);
@@ -98,7 +101,7 @@ class OrderServiceImplTest {
         when(orders.selectOne(any())).thenReturn(existing);
         when(items.list(org.mockito.ArgumentMatchers.<Wrapper<OrderItemEntity>>any())).thenReturn(List.of());
 
-        assertEquals(99L, service.createGeneral(request("retry-2", 3L, 2)).getId());
+        assertEquals(99L, service.createAsync(7L, "retry-2", 3L, 2));
         verifyNoInteractions(tiers, quotas, manager);
     }
 
@@ -131,7 +134,7 @@ class OrderServiceImplTest {
                 .when(quotas).reserve(7L, 3L, 2, 4);
 
         AppException error = assertThrows(AppException.class,
-                () -> service.createGeneral(request("quota-1", 3L, 2)));
+                () -> service.createAsync(7L, "quota-1", 3L, 2));
 
         assertEquals("LIMIT_EXCEEDED", error.code());
         verify(manager).rollback(status);

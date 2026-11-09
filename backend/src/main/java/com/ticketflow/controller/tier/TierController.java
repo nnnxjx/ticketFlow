@@ -36,7 +36,6 @@ public class TierController {
     public ApiResponse<TierView> activate(@PathVariable long id, HttpServletRequest request) { return ok(tiers.activate(id), request); }
     @PostMapping("/tiers/{id}/stop")
     public ApiResponse<TierView> stop(@PathVariable long id, HttpServletRequest request) { return ok(tiers.stop(id), request); }
-
     private <T> ApiResponse<T> ok(T data, HttpServletRequest request) {
         return ApiResponse.ok(data, (String) request.getAttribute(RequestIdInterceptor.ATTRIBUTE));
     }

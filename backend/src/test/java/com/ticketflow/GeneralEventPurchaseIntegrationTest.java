@@ -24,6 +24,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.data.redis.core.StringRedisTemplate;
 
 import java.math.BigDecimal;
 import java.time.Clock;
@@ -35,7 +36,7 @@ import java.util.concurrent.ThreadLocalRandom;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-/** 使用本地测试库验证多场次发布、公开展示和无座票下单；事务结束后回滚测试数据。 */
+/** 使用本地服务验证多场次发布、Redis 库存初始化和异步消费阶段的数据库建单。 */
 @SpringBootTest
 @Transactional
 class GeneralEventPurchaseIntegrationTest {
@@ -47,9 +48,15 @@ class GeneralEventPurchaseIntegrationTest {
     @Autowired private ITierService tiers;
     @Autowired private IOrderService orders;
     @Autowired private Ids ids;
+    @Autowired private StringRedisTemplate redis;
+    private final List<Long> createdTierIds = new ArrayList<>();
 
     @AfterEach
-    void clearUser() { UserContext.clear(); }
+    void clearUser() {
+        // 测试事务会回滚 MySQL；Redis 不参与该事务，需清理测试票档的缓存。
+        for (long tierId : createdTierIds) redis.delete("tf:async:tier:" + tierId + ":stock");
+        UserContext.clear();
+    }
 
     @Test
     void publishesThreeGeneralSessionsWithThreePricesAndAllowsPurchase() {
@@ -98,6 +105,7 @@ class GeneralEventPurchaseIntegrationTest {
                 tierRequest.setSaleEnd(saleEnd);
                 TierView tier = tiers.create(session.getId(), tierRequest);
                 tierIds.add(tier.getId());
+                createdTierIds.add(tier.getId());
                 assertEquals("ON_SALE", tiers.activate(tier.getId()).getStatus());
             }
             assertEquals("ON_SALE", sessions.activate(session.getId()).getStatus());
@@ -117,7 +125,8 @@ class GeneralEventPurchaseIntegrationTest {
         purchase.setRequestId("test-" + UUID.randomUUID());
         purchase.setTierId(tierIds.get(0));
         purchase.setQuantity(1);
-        OrderView order = orders.createGeneral(purchase);
+        OrderView order = orders.detail(orders.createAsync(buyerId, purchase.getRequestId(),
+                purchase.getTierId(), purchase.getQuantity()));
         assertEquals("PENDING_PAYMENT", order.getStatus());
         assertEquals(prices[0], order.getAmount());
         assertEquals(sessionIds.get(0), order.getSessionId());

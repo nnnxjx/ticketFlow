@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.ticketflow.common.AppException;
+import com.ticketflow.common.AsyncStockGate;
 import com.ticketflow.common.CatalogAccess;
 import com.ticketflow.common.Ids;
 import com.ticketflow.common.UserContext;
@@ -13,10 +14,12 @@ import com.ticketflow.entity.order.OrderEntity;
 import com.ticketflow.entity.order.OrderItemEntity;
 import com.ticketflow.entity.order.QuotaEntity;
 import com.ticketflow.entity.payment.PaymentEntity;
+import com.ticketflow.entity.refund.InventoryLogEntity;
 import com.ticketflow.entity.session.SessionEntity;
 import com.ticketflow.entity.tier.TierEntity;
 import com.ticketflow.mapper.order.OrderMapper;
 import com.ticketflow.service.IEventService;
+import com.ticketflow.service.IInventoryLogService;
 import com.ticketflow.service.IOrderItemService;
 import com.ticketflow.service.IOrderService;
 import com.ticketflow.service.IQuotaService;
@@ -50,31 +53,57 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, OrderEntity> impl
     @Autowired private IQuotaService quotas;
     @Autowired private IOrderItemService items;
     @Autowired private IPaymentService payments;
+    @Autowired private IInventoryLogService inventoryLogs;
+    @Autowired private AsyncStockGate stockGate;
     @Autowired private Ids ids;
     @Autowired private TransactionTemplate transactions;
     @Value("${ticketflow.order.payment-timeout-minutes:15}") private long timeoutMinutes;
 
+    // 旧同步下单实现保留作参考，不再注册到业务接口。
+    // public OrderView createGeneral(CreateGeneralOrderRequest request) {
+    //     long userId = UserContext.getUserId();
+    //     String requestId = request.getRequestId().trim();
+    //     OrderEntity existing = findByRequest(userId, requestId);
+    //     if (existing != null) return repeated(existing, request);
+    //     try {
+    //         Long orderId = transactions.execute(status -> writeOrder(userId, requestId, request));
+    //         if (orderId == null) throw new IllegalStateException("Order transaction returned no ID");
+    //         return detailForUser(orderId, userId);
+    //     } catch (DuplicateKeyException ex) {
+    //         existing = findByRequest(userId, requestId);
+    //         if (existing != null) return repeated(existing, request);
+    //         throw ex;
+    //     }
+    // }
+
+
     @Override
-    public OrderView createGeneral(CreateGeneralOrderRequest request) {
-        long userId = UserContext.getUserId();
-        String requestId = request.getRequestId().trim();
-        // 同一次购票重复提交时返回原订单，避免再次扣库存。
+    public long createAsync(long userId, String requestId, long tierId, int quantity) {
+        // 消费者显式传入用户身份；后台线程不能依赖 HTTP 请求的 UserContext。
+        CreateGeneralOrderRequest request = new CreateGeneralOrderRequest();
+        request.setRequestId(requestId);
+        request.setTierId(tierId);
+        request.setQuantity(quantity);
         OrderEntity existing = findByRequest(userId, requestId);
-        if (existing != null) return repeated(existing, request);
+        if (existing != null) {
+            validateSameRequest(existing, request);
+            return existing.getId();
+        }
+        // 订单唯一键兜住重复 MQ 消息；事务内再做最终库存和限购判断。
         try {
             Long orderId = transactions.execute(status -> writeOrder(userId, requestId, request));
             if (orderId == null) throw new IllegalStateException("Order transaction returned no ID");
-            return detailForUser(orderId, userId);
+            return orderId;
         } catch (DuplicateKeyException ex) {
-            // 两个 HTTP 请求同时使用相同 requestId 时，由唯一键识别已提交的订单。
             existing = findByRequest(userId, requestId);
-            if (existing != null) return repeated(existing, request);
-            throw ex;
+            if (existing == null) throw ex;
+            validateSameRequest(existing, request);
+            return existing.getId();
         }
     }
 
-
     private long writeOrder(long userId, String requestId, CreateGeneralOrderRequest request) {
+        // Redis 仅做高并发入口预占，MySQL 票档库存和限购占用是最终交易依据。
         int quantity = request.getQuantity();
         if (quantity < 1) throw CatalogAccess.invalid("单次购票数量不合法");
         TierEntity tier = tiers.getById(request.getTierId());
@@ -156,12 +185,16 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, OrderEntity> impl
                 .eq(OrderEntity::getUserId, userId).eq(OrderEntity::getRequestId, requestId));
     }
 
-    private OrderView repeated(OrderEntity order, CreateGeneralOrderRequest request) {
+    // private OrderView repeated(OrderEntity order, CreateGeneralOrderRequest request) {
+    //     validateSameRequest(order, request);
+    //     return detailForUser(order.getId(), order.getUserId());
+    // }
+
+    private void validateSameRequest(OrderEntity order, CreateGeneralOrderRequest request) {
         if (!"GENERAL".equals(order.getSaleMode()) || !order.getTierId().equals(request.getTierId())
                 || !order.getQuantity().equals(request.getQuantity())) {
             throw new AppException(HttpStatus.CONFLICT, "REQUEST_ID_CONFLICT", "相同 requestId 的购票参数不同");
         }
-        return detailForUser(order.getId(), order.getUserId());
     }
 
     private OrderView view(OrderEntity order, List<OrderItemView> itemViews) {
@@ -174,6 +207,8 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, OrderEntity> impl
     public OrderView cancel(long orderId) {
         long userId = UserContext.getUserId();
         transactions.execute(status -> cancelPending(orderId, userId, false));
+        // 提交 MySQL 后再回补 Redis；重复取消时 Lua 标记允许安全重试。
+        creditCancelled(orderId);
         return detailForUser(orderId, userId);
     }
 
@@ -203,6 +238,7 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, OrderEntity> impl
             try {
                 Boolean changed = transactions.execute(status -> cancelPending(order.getId(), order.getUserId(), true));
                 if (Boolean.TRUE.equals(changed)) closed++;
+                creditCancelled(order.getId());
             } catch (RuntimeException ex) {
                 // 单笔异常不能阻止本轮其他到期订单关单；失败订单下一轮仍可重扫。
                 log.error("Failed to close expired order {}", order.getId(), ex);
@@ -243,10 +279,45 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, OrderEntity> impl
                 .setSql("active_qty = active_qty - {0}", quantity))) {
             throw new IllegalStateException("Quota release failed");
         }
+        // 取消后始终释放用户限购；只有还可销售的票才重新进入可售库存。
+        if (!canResell(order)) return;
+        InventoryLogEntity logEntry = new InventoryLogEntity();
+        logEntry.setId(ids.next());
+        logEntry.setOperationId("ORDER_RELEASE:" + order.getId());
+        logEntry.setOrderId(order.getId());
+        logEntry.setTierId(order.getTierId());
+        logEntry.setOperation("ORDER_RELEASE");
+        logEntry.setQuantity(quantity);
+        if (!inventoryLogs.save(logEntry)) throw new IllegalStateException("Cancellation inventory log insert failed");
         if (!tiers.update(new LambdaUpdateWrapper<TierEntity>()
-                .eq(TierEntity::getId, order.getTierId())
+                .eq(TierEntity::getId, order.getTierId()).eq(TierEntity::getStatus, "ON_SALE")
+                .apply("sale_start <= UTC_TIMESTAMP(3) AND sale_end > UTC_TIMESTAMP(3)")
+                .apply("available_stock <= total_stock - {0}", quantity)
                 .setSql("available_stock = available_stock + {0}", quantity))) {
             throw new IllegalStateException("Stock release failed");
+        }
+    }
+
+    private boolean canResell(OrderEntity order) {
+        SessionEntity session = sessions.getById(order.getSessionId());
+        TierEntity tier = tiers.getById(order.getTierId());
+        EventEntity event = session == null ? null : events.getById(session.getEventId());
+        LocalDateTime now = LocalDateTime.now(Clock.systemUTC());
+        return session != null && tier != null && event != null
+                && "PUBLISHED".equals(event.getStatus()) && "ON_SALE".equals(session.getStatus())
+                && "ON_SALE".equals(tier.getStatus()) && now.isBefore(session.getStartTime())
+                && !now.isBefore(session.getSaleStart()) && now.isBefore(session.getSaleEnd())
+                && !now.isBefore(tier.getSaleStart()) && now.isBefore(tier.getSaleEnd());
+    }
+
+    private void creditCancelled(long orderId) {
+        OrderEntity order = getById(orderId);
+        if (order != null && "CANCELLED".equals(order.getStatus()) && order.getTierId() != null
+                && stockGate.isAsyncOrder(order.getUserId(), order.getRequestId())) {
+            // 以已提交的库存流水决定 Redis 是否增加库存，避免跨越销售截止点时判断不一致。
+            boolean restock = inventoryLogs.getOne(new LambdaQueryWrapper<InventoryLogEntity>()
+                    .eq(InventoryLogEntity::getOperationId, "ORDER_RELEASE:" + orderId)) != null;
+            stockGate.credit(order.getTierId(), order.getUserId(), order.getQuantity(), "CANCEL:" + orderId, restock);
         }
     }
 

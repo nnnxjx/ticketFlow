@@ -18,11 +18,14 @@ spring:
     port: ${RABBITMQ_PORT:5672}
     username: ${RABBITMQ_USER:guest}
     password: ${RABBITMQ_PASSWORD:guest}
+    publisher-confirm-type: correlated
   profiles:
     active: dev
 server:
   port: 8080
 ticketflow:
+  ids:
+    worker-id: ${TICKETFLOW_WORKER_ID:0}
   jwt:
     secret: ${JWT_SECRET:}
     ttl-minutes: 120

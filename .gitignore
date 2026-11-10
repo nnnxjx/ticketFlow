@@ -9,6 +9,7 @@ backend/src/main/resources/application-local.yaml
 **/dist/
 **/target/
 **/coverage/
+*.tsbuildinfo
 
 # Editor and runtime files
 .idea/

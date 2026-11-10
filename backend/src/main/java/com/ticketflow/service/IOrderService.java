@@ -15,6 +15,7 @@ public interface IOrderService extends IService<OrderEntity> {
     OrderView createAssigned(CreateAssignedOrderRequest request);
     OrderView detail(long orderId);
     OrderPageView mine(int page, int size);
+    OrderPageView organizerOrders(Long eventId, int page, int size);
     OrderView cancel(long orderId);
     PaymentView pay(long orderId);
     int closeExpired(int limit);

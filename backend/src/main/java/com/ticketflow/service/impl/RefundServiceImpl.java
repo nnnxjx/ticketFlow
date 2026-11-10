@@ -7,6 +7,7 @@ import com.ticketflow.common.AppException;
 import com.ticketflow.common.AsyncStockGate;
 import com.ticketflow.common.CatalogAccess;
 import com.ticketflow.common.Ids;
+import com.ticketflow.common.SeatEventPublisher;
 import com.ticketflow.common.UserContext;
 import com.ticketflow.entity.event.EventEntity;
 import com.ticketflow.entity.order.OrderEntity;
@@ -53,6 +54,7 @@ public class RefundServiceImpl extends ServiceImpl<RefundMapper, RefundEntity> i
     @Autowired private IQuotaService quotas;
     @Autowired private IInventoryLogService inventoryLogs;
     @Autowired private ISeatCatalogService seats;
+    @Autowired private SeatEventPublisher seatEvents;
     @Autowired private AsyncStockGate stockGate;
     @Autowired private Ids ids;
     @Autowired private TransactionTemplate transactions;
@@ -193,6 +195,7 @@ public class RefundServiceImpl extends ServiceImpl<RefundMapper, RefundEntity> i
                     .setSql("version = version + 1"))) {
                 throw new IllegalStateException("Refund seat transition failed");
             }
+            seatEvents.changed(order.getSessionId(), seat.getId(), seat.getVersion() + 1);
         }
     }
 

@@ -44,9 +44,10 @@ public class TierServiceImpl extends ServiceImpl<TierMapper, TierEntity> impleme
 
     @Override @Transactional
     public TierView update(long tierId, TierRequest request) {
-        access.tierOwned(tierId);
-        TierEntity tier = new TierEntity();
+        TierEntity tier = access.tierOwned(tierId);
         SessionEntity session = editableSession(tier.getSessionId());
+        // 以加锁后的当前状态为准，避免启用与编辑交错覆盖库存配置。
+        tier = lockedTier(tierId);
         if (!"DRAFT".equals(tier.getStatus())) throw CatalogAccess.conflict("只有草稿票档可编辑");
         fill(tier, request, session);
         try {
@@ -73,20 +74,29 @@ public class TierServiceImpl extends ServiceImpl<TierMapper, TierEntity> impleme
     @Override @Transactional
     public TierView activate(long tierId) {
         TierEntity tier = access.tierOwned(tierId);
-        // 草稿期允许改票档；启用时锁定场次和票档，使用最终库存初始化 Redis。
+        // 与场次删除保持“场次行 → 票档行”的锁顺序。
         SessionEntity session = sessions.selectOne(new LambdaQueryWrapper<SessionEntity>()
                 .eq(SessionEntity::getId, tier.getSessionId()).last("FOR UPDATE"));
-        if (session == null || !"GENERAL".equals(session.getSaleMode()) || !"DRAFT".equals(session.getStatus())) {
-            throw CatalogAccess.conflict("只能启用不选座草稿场次的票档");
+        if (session == null) throw CatalogAccess.notFound();
+        if (!"GENERAL".equals(session.getSaleMode())
+                || (!"DRAFT".equals(session.getStatus()) && !"ON_SALE".equals(session.getStatus())
+                && !"STOPPED".equals(session.getStatus()))) {
+            throw CatalogAccess.conflict("只有不选座且未删除的场次可启用票档");
         }
         tier = lockedTier(tierId);
-        if (!"DRAFT".equals(tier.getStatus())) throw CatalogAccess.conflict("只有草稿票档可启用");
-        stockGate.initialize(tier);
+        if (!"DRAFT".equals(tier.getStatus()) && !"STOPPED".equals(tier.getStatus())) {
+            throw CatalogAccess.conflict("只有草稿或已停售票档可启用");
+        }
+        if ("DRAFT".equals(tier.getStatus())) {
+            if (!"DRAFT".equals(session.getStatus())) throw CatalogAccess.conflict("草稿票档只能在草稿场次启用");
+            stockGate.initialize(tier);
+        }
+        // 停售票档可能已有订单和预占，重新启用不能用数据库库存覆盖 Redis。
         if (!stockGate.ready(tierId)) throw CatalogAccess.conflict("异步库存不可用，请先对账");
         if (!update(new LambdaUpdateWrapper<TierEntity>().eq(TierEntity::getId, tierId)
-                .eq(TierEntity::getStatus, "DRAFT")
+                .eq(TierEntity::getStatus, tier.getStatus())
                 .set(TierEntity::getStatus, "ON_SALE"))) {
-            throw CatalogAccess.conflict("只有草稿票档可启用");
+            throw CatalogAccess.conflict("票档状态已变化");
         }
         tier.setStatus("ON_SALE");
         return view(tier);

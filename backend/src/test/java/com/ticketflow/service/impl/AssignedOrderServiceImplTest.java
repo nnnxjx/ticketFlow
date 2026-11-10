@@ -3,6 +3,7 @@ package com.ticketflow.service.impl;
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.ticketflow.common.AppException;
 import com.ticketflow.common.Ids;
+import com.ticketflow.common.SeatEventPublisher;
 import com.ticketflow.common.UserContext;
 import com.ticketflow.dto.order.CreateAssignedOrderRequest;
 import com.ticketflow.entity.event.EventEntity;
@@ -79,6 +80,7 @@ class AssignedOrderServiceImplTest {
         ReflectionTestUtils.setField(service, "sessions", sessions);
         ReflectionTestUtils.setField(service, "events", events);
         ReflectionTestUtils.setField(service, "seats", seats);
+        ReflectionTestUtils.setField(service, "seatEvents", mock(SeatEventPublisher.class));
         ReflectionTestUtils.setField(service, "venueSeats", venueSeats);
         ReflectionTestUtils.setField(service, "items", items);
         ReflectionTestUtils.setField(service, "ids", mock(Ids.class));

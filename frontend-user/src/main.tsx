@@ -1,9 +1,13 @@
-import React from 'react'
-import ReactDOM from 'react-dom/client'
-import './style.css'
+import React from "react";
+import ReactDOM from "react-dom/client";
+import { UserProvider } from "./context";
+import { UserLayout } from "./components/UserLayout";
+import "./style.css";
 
-function App() {
-  return <main><h1>TicketFlow 用户端</h1><p>工程已就绪。下一步接入演出列表与购票流程。</p></main>
-}
-
-ReactDOM.createRoot(document.getElementById('root')!).render(<React.StrictMode><App /></React.StrictMode>)
+ReactDOM.createRoot(document.getElementById("root")!).render(
+  <React.StrictMode>
+    <UserProvider>
+      <UserLayout />
+    </UserProvider>
+  </React.StrictMode>,
+);

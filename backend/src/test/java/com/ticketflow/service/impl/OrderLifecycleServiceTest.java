@@ -3,6 +3,7 @@ package com.ticketflow.service.impl;
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.ticketflow.common.AppException;
 import com.ticketflow.common.AsyncStockGate;
+import com.ticketflow.common.SeatEventPublisher;
 import com.ticketflow.common.Ids;
 import com.ticketflow.common.UserContext;
 import com.ticketflow.entity.event.EventEntity;
@@ -190,6 +191,7 @@ class OrderLifecycleServiceTest {
         ReflectionTestUtils.setField(service, "quotas", quotas);
         ReflectionTestUtils.setField(service, "stockGate", stockGate);
         ReflectionTestUtils.setField(service, "seats", seats);
+        ReflectionTestUtils.setField(service, "seatEvents", mock(SeatEventPublisher.class));
         ReflectionTestUtils.setField(service, "sessions", sessions);
         ReflectionTestUtils.setField(service, "events", events);
         ReflectionTestUtils.setField(service, "inventoryLogs", inventoryLogs);

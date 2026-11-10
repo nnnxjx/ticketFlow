@@ -7,6 +7,7 @@ import com.ticketflow.common.AppException;
 import com.ticketflow.common.AsyncStockGate;
 import com.ticketflow.common.CatalogAccess;
 import com.ticketflow.common.Ids;
+import com.ticketflow.common.SeatEventPublisher;
 import com.ticketflow.common.UserContext;
 import com.ticketflow.dto.order.CreateGeneralOrderRequest;
 import com.ticketflow.dto.order.CreateAssignedOrderRequest;
@@ -61,7 +62,9 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, OrderEntity> impl
     @Autowired private IOrderItemService items;
     @Autowired private IPaymentService payments;
     @Autowired private IInventoryLogService inventoryLogs;
+    @Autowired private CatalogAccess access;
     @Autowired private ISeatCatalogService seats;
+    @Autowired private SeatEventPublisher seatEvents;
     @Autowired private VenueSeatMapper venueSeats;
     @Autowired private AsyncStockGate stockGate;
     @Autowired private Ids ids;
@@ -245,6 +248,7 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, OrderEntity> impl
                     .setSql("version = version + 1"))) {
                 throw new AppException(HttpStatus.CONFLICT, "SEAT_UNAVAILABLE", "座位已被其他订单锁定");
             }
+            seatEvents.changed(sessionId, seatId, seat.getVersion() + 1);
             String label = template.getArea() + " " + template.getRowNo() + "排" + template.getSeatNo() + "座";
             if (label.length() > 160) throw CatalogAccess.invalid("座位位置描述过长");
             OrderItemEntity item = new OrderItemEntity();
@@ -290,6 +294,36 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, OrderEntity> impl
                 .last("LIMIT " + size + " OFFSET " + offset)).stream()
                 .map(order -> view(order, List.of())).toList();
         return new OrderPageView(page, size, total, orders);
+    }
+
+    @Override
+    public OrderPageView organizerOrders(Long eventId, int page, int size) {
+        if (page < 1 || size < 1 || size > 100) throw CatalogAccess.invalid("页码或每页数量不合法");
+        long offset = ((long) page - 1) * size;
+        if (offset > Integer.MAX_VALUE) throw CatalogAccess.invalid("页码过大");
+        List<Long> eventIds;
+        if (eventId != null) {
+            access.eventOwned(eventId);
+            eventIds = List.of(eventId);
+        } else {
+            // 不依赖演出列表接口的展示上限，避免遗漏较早演出的订单。
+            eventIds = events.list(new LambdaQueryWrapper<EventEntity>()
+                    .eq(EventEntity::getOrganizerId, access.currentOrganizer().getId()))
+                    .stream().map(EventEntity::getId).toList();
+        }
+        if (eventIds.isEmpty()) return new OrderPageView(page, size, 0, List.of());
+        List<Long> sessionIds = sessions.list(new LambdaQueryWrapper<SessionEntity>()
+                .in(SessionEntity::getEventId, eventIds)).stream().map(SessionEntity::getId).toList();
+        if (sessionIds.isEmpty()) return new OrderPageView(page, size, 0, List.of());
+        LambdaQueryWrapper<OrderEntity> scope = new LambdaQueryWrapper<OrderEntity>()
+                .in(OrderEntity::getSessionId, sessionIds);
+        long total = count(scope);
+        List<OrderView> results = list(new LambdaQueryWrapper<OrderEntity>()
+                .in(OrderEntity::getSessionId, sessionIds)
+                .orderByDesc(OrderEntity::getCreatedAt, OrderEntity::getId)
+                .last("LIMIT " + size + " OFFSET " + offset))
+                .stream().map(order -> view(order, List.of())).toList();
+        return new OrderPageView(page, size, total, results);
     }
 
     private OrderEntity findByRequest(long userId, String requestId) {
@@ -398,6 +432,7 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, OrderEntity> impl
                     .setSql("version = version + 1"))) {
                 throw new IllegalStateException("Seat release failed");
             }
+            seatEvents.changed(order.getSessionId(), seat.getId(), seat.getVersion() + 1);
         }
     }
 
@@ -503,6 +538,7 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, OrderEntity> impl
                     .setSql("version = version + 1"))) {
                 throw CatalogAccess.conflict("座位锁定已过期");
             }
+            seatEvents.changed(order.getSessionId(), seat.getId(), seat.getVersion() + 1);
         }
     }
 

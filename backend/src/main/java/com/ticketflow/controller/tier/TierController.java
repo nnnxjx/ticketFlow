@@ -5,6 +5,7 @@ import com.ticketflow.dto.tier.TierRequest;
 import com.ticketflow.interceptor.RequestIdInterceptor;
 import com.ticketflow.service.ITierService;
 import com.ticketflow.vo.tier.TierView;
+import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
@@ -33,6 +34,7 @@ public class TierController {
     @DeleteMapping("/tiers/{id}")
     public ApiResponse<Void> delete(@PathVariable long id, HttpServletRequest request) { tiers.delete(id); return ok(null, request); }
     @PostMapping("/tiers/{id}/activate")
+    @Operation(summary = "启用草稿或重新启用已停售票档；重新启用不重置库存")
     public ApiResponse<TierView> activate(@PathVariable long id, HttpServletRequest request) { return ok(tiers.activate(id), request); }
     @PostMapping("/tiers/{id}/stop")
     public ApiResponse<TierView> stop(@PathVariable long id, HttpServletRequest request) { return ok(tiers.stop(id), request); }

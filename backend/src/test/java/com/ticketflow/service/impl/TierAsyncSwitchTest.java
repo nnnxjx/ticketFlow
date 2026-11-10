@@ -54,6 +54,36 @@ class TierAsyncSwitchTest {
     }
 
     @Test
+    void stoppedTierCanResumeWithoutResettingRedisStock() {
+        wire();
+        when(access.tierOwned(1L)).thenReturn(tier(20, "STOPPED"));
+        when(sessions.selectOne(any(Wrapper.class))).thenReturn(session());
+        TierEntity current = tier(12, "STOPPED");
+        when(mapper.selectOne(any(Wrapper.class))).thenReturn(current);
+        when(mapper.update(isNull(), any(Wrapper.class))).thenReturn(1);
+        when(gate.ready(1L)).thenReturn(true);
+
+        service.activate(1L);
+
+        verify(gate, never()).initialize(any());
+        verify(mapper).update(isNull(), any(Wrapper.class));
+        assertEquals(12, current.getAvailableStock());
+        assertEquals("ON_SALE", current.getStatus());
+    }
+
+    @Test
+    void stoppedTierCannotResumeWhenRedisStockIsUnavailable() {
+        wire();
+        when(access.tierOwned(1L)).thenReturn(tier(20, "STOPPED"));
+        when(sessions.selectOne(any(Wrapper.class))).thenReturn(session());
+        when(mapper.selectOne(any(Wrapper.class))).thenReturn(tier(12, "STOPPED"));
+
+        assertThrows(AppException.class, () -> service.activate(1L));
+        verify(gate, never()).initialize(any());
+        verify(mapper, never()).update(any(), any(Wrapper.class));
+    }
+
+    @Test
     void editRejectsStatusChangedAfterInitialRead() {
         wire();
         when(access.tierOwned(1L)).thenReturn(tier(10, "DRAFT"));

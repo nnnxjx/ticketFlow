@@ -18,6 +18,6 @@ public class WebMvcConfig implements WebMvcConfigurer {
         registry.addInterceptor(authInterceptor)
                 .addPathPatterns("/api/v1/**")
                 .excludePathPatterns("/api/v1/auth/register", "/api/v1/auth/login", "/api/v1/system/ping",
-                        "/api/v1/events", "/api/v1/events/*", "/api/v1/events/*/sessions", "/api/v1/sessions/*/tiers", "/api/v1/sessions/*/seats");
+                        "/api/v1/events", "/api/v1/events/*", "/api/v1/events/*/sessions", "/api/v1/sessions/*/tiers", "/api/v1/sessions/*/seats", "/api/v1/sessions/*/seats/stream");
     }
 }

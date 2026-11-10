@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.ticketflow.common.CatalogAccess;
 import com.ticketflow.common.Ids;
+import com.ticketflow.common.SeatEventPublisher;
 import com.ticketflow.entity.event.EventEntity;
 import com.ticketflow.entity.seat.SessionSeatEntity;
 import com.ticketflow.entity.session.SessionEntity;
@@ -32,6 +33,7 @@ public class SeatCatalogServiceImpl extends ServiceImpl<SessionSeatMapper, Sessi
     @Autowired private EventMapper events;
     @Autowired private VenueSeatMapper venueSeats;
     @Autowired private Ids ids;
+    @Autowired private SeatEventPublisher seatEvents;
 
     @Override @Transactional
     public List<SeatView> initialize(long sessionId, BigDecimal defaultPrice) {
@@ -78,6 +80,7 @@ public class SeatCatalogServiceImpl extends ServiceImpl<SessionSeatMapper, Sessi
         }
         seat.setPrice(price);
         seat.setVersion(seat.getVersion() + 1);
+        seatEvents.changed(seat.getSessionId(), seatId, seat.getVersion());
         return view(seat, venueSeats.selectById(seat.getVenueSeatId()));
     }
 

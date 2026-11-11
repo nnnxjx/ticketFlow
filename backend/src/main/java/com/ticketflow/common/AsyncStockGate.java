@@ -107,6 +107,7 @@ public class AsyncStockGate {
 
     public Long orderId(long userId, String requestId) {
         String value = redis.opsForValue().get(orderResultKey(userId, requestId));
+        log.info("Redis async order id: userId={}, requestId={}, value={}", userId, requestId, value);
         return value == null ? null : Long.valueOf(value);
     }
 

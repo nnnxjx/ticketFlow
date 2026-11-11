@@ -97,22 +97,14 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, OrderEntity> impl
         request.setRequestId(requestId);
         request.setTierId(tierId);
         request.setQuantity(quantity);
-        OrderEntity existing = findByRequest(userId, requestId);
-        if (existing != null) {
-            validateSameRequest(existing, request);
-            return existing.getId();
-        }
         // 订单唯一键兜住重复 MQ 消息；事务内再做最终库存和限购判断。
-        try {
-            Long orderId = transactions.execute(status -> writeOrder(userId, requestId, request));
-            if (orderId == null) throw new IllegalStateException("Order transaction returned no ID");
-            return orderId;
-        } catch (DuplicateKeyException ex) {
-            existing = findByRequest(userId, requestId);
-            if (existing == null) throw ex;
-            validateSameRequest(existing, request);
-            return existing.getId();
-        }
+          try{
+              Long orderId = transactions.execute(status -> writeOrder(userId, requestId, request));
+              if (orderId == null) throw new IllegalStateException("Order transaction returned no ID");
+              return orderId;
+          }catch(Exception e){
+              throw new AppException(HttpStatus.INTERNAL_SERVER_ERROR, "ORDER_CREATION_FAILED", "订单创建失败");
+          }
     }
 
     private long writeOrder(long userId, String requestId, CreateGeneralOrderRequest request) {

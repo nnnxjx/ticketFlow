@@ -37,11 +37,21 @@ public class AsyncStockGate {
     public void removeDraft(long tierId) { redis.delete(stockKey(tierId)); }
 
     public long reserve(long userId, String requestId, TierEntity tier, int quantity) {
-        Long result = redis.execute(reserve, List.of(stockKey(tier.getId()), quotaKey(tier.getId(), userId),
-                        tokenKey(userId, requestId), pauseKey(tier.getId()), resultKey(userId, requestId), markerKey(userId, requestId)),
-                String.valueOf(quantity), String.valueOf(tier.getPerUserLimit()), String.valueOf(tier.getId()),
-                String.valueOf(tier.getSaleStart().toInstant(ZoneOffset.UTC).toEpochMilli()),
-                String.valueOf(tier.getSaleEnd().toInstant(ZoneOffset.UTC).toEpochMilli()));
+        Long result = redis.execute(reserve,
+                List.of(
+                        stockKey(tier.getId()),
+                        quotaKey(tier.getId(), userId),
+                        tokenKey(userId, requestId),
+                        pauseKey(tier.getId()),
+                        resultKey(userId, requestId),
+                        markerKey(userId, requestId)
+                ),
+                        String.valueOf(quantity),
+                        String.valueOf(tier.getPerUserLimit()),
+                        String.valueOf(tier.getId()),
+                        String.valueOf(tier.getSaleStart().toInstant(ZoneOffset.UTC).toEpochMilli()),
+                        String.valueOf(tier.getSaleEnd().toInstant(ZoneOffset.UTC).toEpochMilli())
+        );
         if (result == null) throw new IllegalStateException("Redis reservation returned no result");
         return result;
     }
@@ -60,6 +70,7 @@ public class AsyncStockGate {
                 tokenKey(userId, requestId), markerKey(userId, requestId)));
         if (Long.valueOf(1).equals(result) || Long.valueOf(2).equals(result)) return true;
         if (Long.valueOf(3).equals(result)) return false;
+        //只有预占的令牌丢失才会走到这
         pause(tierId);
         throw new AppException(HttpStatus.CONFLICT, "ASYNC_RECONCILE", "预占令牌异常，票档已暂停待对账");
     }

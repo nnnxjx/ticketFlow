@@ -11,7 +11,7 @@ import type {
 } from "./types";
 import { labels } from "./format";
 import { tokenKey, api } from "./api";
-import { navigate } from "./router";
+import { useNavigate } from "react-router";
 export type {
   Id,
   Show,
@@ -27,9 +27,8 @@ export { price, when, labels } from "./format";
 export { tokenKey, api } from "./api";
 
 export function useUserModel() {
-  const [tab, setTabState] = useState<"discover" | "orders">("discover");
+  const navigate = useNavigate();
   function setTab(value: "discover" | "orders") {
-    setTabState(value);
     navigate(value === "orders" ? "/orders" : "/");
   }
   const [token, setToken] = useState(localStorage.getItem(tokenKey) || "");
@@ -312,7 +311,6 @@ export function useUserModel() {
       : 0;
 
   return {
-    tab,
     setTab,
     token,
     setToken,

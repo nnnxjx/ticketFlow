@@ -4,8 +4,10 @@ import { when } from "../model";
 import { api } from "../api";
 import { useEffect, useState } from "react";
 import type { Show } from "../types";
+import { Link, useParams } from "react-router";
 
-export function DiscoverPage({ eventId, onOpen, onBack }: { eventId?: string; onOpen: (id: string) => void; onBack: () => void }) {
+export function DiscoverPage() {
+  const { eventId } = useParams();
   const {
     shows,
     show,
@@ -63,10 +65,10 @@ export function DiscoverPage({ eventId, onOpen, onBack }: { eventId?: string; on
         </div>
         <div className="show-grid">
           {shows.map((x, i) => (
-            <button
+            <Link
               key={x.id}
               className={`show-card tone-${i % 4}`}
-              onClick={() => onOpen(x.id)}
+              to={`/events/${x.id}`}
             >
               <div className="art">
                 0{i + 1}
@@ -77,7 +79,7 @@ export function DiscoverPage({ eventId, onOpen, onBack }: { eventId?: string; on
                 <h3>{x.title}</h3>
                 <span>查看场次与门票 ↗</span>
               </div>
-            </button>
+            </Link>
           ))}
         </div>
         {!shows.length && <div className="empty">目前没有已发布的演出。</div>}
@@ -91,12 +93,9 @@ export function DiscoverPage({ eventId, onOpen, onBack }: { eventId?: string; on
               <h2>{show.title}</h2>
               <p>{show.description || "精彩演出即将开始。"}</p>
             </div>
-            <button
-              className="secondary"
-              onClick={onBack}
-            >
+            <Link className="secondary" to="/">
               返回演出列表
-            </button>
+            </Link>
           </div>
           {sessions.map((x) => (
             <button

@@ -44,8 +44,9 @@ public class AsyncOrderServiceImpl implements IAsyncOrderService {
         if (existing != null) return ordered(existing, input.getTierId(), input.getQuantity());
         // 判断是不是一次前端超时重试的请求，requestId 和已有的预占令牌一致
         boolean retry = stockGate.matchesToken(userId, requestId, input.getTierId(), input.getQuantity());
-        //兜底，参数不一致但是requestId一样
+        //兜底，参数不一致但是requestId一样,其实基本不可能出现的
         if (!retry && stockGate.hasToken(userId, requestId)) throw requestConflict();
+
         TierEntity tier = retry ? tiers.getById(input.getTierId()) : purchasable(input.getTierId());
         if (tier == null) throw CatalogAccess.notFound();
         String body = encode(new GeneralOrderMessage(userId, requestId, tier.getId(), input.getQuantity()));
@@ -99,8 +100,8 @@ public class AsyncOrderServiceImpl implements IAsyncOrderService {
         int quantity = message.getQuantity();
         OrderEntity existing = findOrder(userId, requestId);
         if (existing != null) {
+            //做一下判断同一次请求的参数是否一致
             ordered(existing, tierId, quantity);
-            stockGate.confirm(userId, requestId, tierId);
             return;
         }
         // 请求侧发布失败后可能已释放令牌；这种迟到消息不能再建单。
@@ -109,7 +110,6 @@ public class AsyncOrderServiceImpl implements IAsyncOrderService {
         try {
             orderId = orders.createAsync(userId, requestId, tierId, quantity);
         } catch (AppException ex) {
-            if (findOrder(userId, requestId) != null) throw ex;
             if (stockGate.release(userId, requestId, tierId)) stockGate.markRejected(userId, requestId, ex.code());
             return;
         }

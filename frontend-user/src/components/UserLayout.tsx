@@ -4,12 +4,11 @@ import { AuthPanel } from "./AuthPanel";
 import { DiscoverPage } from "./DiscoverPage";
 import { OrdersPage } from "./OrdersPage";
 import { Toast } from "./Toast";
-import { navigate, usePath } from "../router";
+import { Link, Route, Routes, useLocation } from "react-router";
 import { useEffect } from "react";
 
 export function UserLayout() {
   const {
-    setTab,
     token,
     setToken,
     notice,
@@ -19,9 +18,10 @@ export function UserLayout() {
     run,
     listOrders,
   } = useUserContext();
-  const path = usePath();
-  const eventId = /^\/events\/([^/]+)$/.exec(path)?.[1];
-  const ordersRoute = path === "/orders";
+  const location = useLocation();
+  const ordersRoute = location.pathname === "/orders";
+
+  useEffect(() => { window.scrollTo(0, 0); }, [location.pathname]);
 
   useEffect(() => {
     if (ordersRoute && token) void run(() => listOrders(1));
@@ -41,18 +41,18 @@ export function UserLayout() {
           <span>T</span> TicketFlow <small>发现下一场精彩</small>
         </div>
         <nav>
-          <button
+          <Link
             className={!ordersRoute ? "selected" : ""}
-            onClick={() => setTab("discover")}
+            to="/"
           >
             发现演出
-          </button>
-          <button
+          </Link>
+          <Link
             className={ordersRoute ? "selected" : ""}
-            onClick={() => setTab("orders")}
+            to="/orders"
           >
             我的订单
-          </button>
+          </Link>
         </nav>
         {token && (
           <button className="link" onClick={logout}>
@@ -63,7 +63,12 @@ export function UserLayout() {
       <Toast message={notice} dismiss={() => setNotice("")} />
       <main>
         {!token && <AuthPanel />}
-        {ordersRoute ? <OrdersPage /> : <DiscoverPage eventId={eventId} onOpen={(id) => navigate(`/events/${id}`)} onBack={() => navigate("/")} />}
+        <Routes>
+          <Route path="/" element={<DiscoverPage />} />
+          <Route path="/events/:eventId" element={<DiscoverPage />} />
+          <Route path="/orders" element={<OrdersPage />} />
+          <Route path="*" element={<div className="empty">页面不存在。<Link to="/">返回演出列表</Link></div>} />
+        </Routes>
       </main>
       <footer>TicketFlow · 本地模拟购票平台</footer>
     </div>

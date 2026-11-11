@@ -57,11 +57,10 @@ public class AsyncOrderServiceImpl implements IAsyncOrderService {
             String code = switch ((int) result) {
                 case -1 -> "SOLD_OUT";
                 case -2 -> "LIMIT_EXCEEDED";
-                case -4 -> "ASYNC_PAUSED";
                 case -5 -> "SALE_WINDOW_CLOSED";
                 default -> "ASYNC_RECONCILE";
             };
-            if (result == -3) stockGate.pause(tier.getId());
+            // 库存键缺失只拒绝本次请求；不因单次缓存异常封停整个票档。
             stockGate.markRejected(userId, requestId, code);
             return rejected(userId, requestId, code);
         }

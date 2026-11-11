@@ -1,6 +1,8 @@
 package com.ticketflow.common;
 
 import com.ticketflow.entity.tier.TierEntity;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -14,6 +16,7 @@ import java.util.List;
 
 @Component
 public class AsyncStockGate {
+    private static final Logger log = LoggerFactory.getLogger(AsyncStockGate.class);
     @Autowired private StringRedisTemplate redis;
     private final DefaultRedisScript<Long> reserve = script("redis/reserve.lua");
     private final DefaultRedisScript<Long> release = script("redis/release.lua");
@@ -30,7 +33,6 @@ public class AsyncStockGate {
     public void initialize(TierEntity tier) {
         // 草稿不可购买；启用事务持有票档行锁，可覆盖失败尝试留下的缓存。
         if (!"DRAFT".equals(tier.getStatus())) throw CatalogAccess.conflict("只能初始化草稿票档库存");
-        if (Boolean.TRUE.equals(redis.hasKey(pauseKey(tier.getId())))) throw CatalogAccess.conflict("票档已暂停，请先对账");
         redis.opsForValue().set(stockKey(tier.getId()), String.valueOf(tier.getAvailableStock()));
     }
 
@@ -42,7 +44,6 @@ public class AsyncStockGate {
                         stockKey(tier.getId()),
                         quotaKey(tier.getId(), userId),
                         tokenKey(userId, requestId),
-                        pauseKey(tier.getId()),
                         resultKey(userId, requestId),
                         markerKey(userId, requestId)
                 ),
@@ -70,16 +71,16 @@ public class AsyncStockGate {
                 tokenKey(userId, requestId), markerKey(userId, requestId)));
         if (Long.valueOf(1).equals(result) || Long.valueOf(2).equals(result)) return true;
         if (Long.valueOf(3).equals(result)) return false;
-        //只有预占的令牌丢失才会走到这
-        pause(tierId);
-        throw new AppException(HttpStatus.CONFLICT, "ASYNC_RECONCILE", "预占令牌异常，票档已暂停待对账");
+        // 令牌缺失或 Redis 计数异常需要按请求对账，不能据此封停其他购票请求。
+        log.error("Redis reservation release needs reconciliation: tierId={}, userId={}, requestId={}, result={}", tierId, userId, requestId, result);
+        throw new AppException(HttpStatus.CONFLICT, "ASYNC_RECONCILE", "预占令牌异常，请对账");
     }
 
     public void confirm(long userId, String requestId, long tierId) {
         Long result = redis.execute(confirm, List.of(tokenKey(userId, requestId), markerKey(userId, requestId)));
         if (Long.valueOf(1).equals(result) || Long.valueOf(2).equals(result)) return;
-        pause(tierId);
-        throw new AppException(HttpStatus.CONFLICT, "ASYNC_RECONCILE", "预占令牌异常，票档已暂停待对账");
+        log.error("Redis reservation confirmation needs reconciliation: tierId={}, userId={}, requestId={}, result={}", tierId, userId, requestId, result);
+        throw new AppException(HttpStatus.CONFLICT, "ASYNC_RECONCILE", "预占令牌异常，请对账");
     }
 
     public boolean isAsyncOrder(long userId, String requestId) {
@@ -100,24 +101,22 @@ public class AsyncStockGate {
     }
 
     public boolean ready(long tierId) {
-        return Boolean.TRUE.equals(redis.hasKey(stockKey(tierId)))
-                && !Boolean.TRUE.equals(redis.hasKey(pauseKey(tierId)));
+        return Boolean.TRUE.equals(redis.hasKey(stockKey(tierId)));
     }
 
+    // 库存回补
     public void credit(long tierId, long userId, int quantity, String operationId, boolean restock) {
         Long result = redis.execute(credit, List.of(stockKey(tierId), quotaKey(tierId, userId), "tf:async:credit:" + operationId),
                 String.valueOf(quantity), restock ? "1" : "0");
         if (result == null || result < 0) {
-            pause(tierId);
-            throw new AppException(HttpStatus.CONFLICT, "ASYNC_RECONCILE", "Redis 库存差异，票档已暂停待对账");
+            log.error("Redis stock credit needs reconciliation: tierId={}, userId={}, operationId={}, result={}", tierId, userId, operationId, result);
+            throw new AppException(HttpStatus.CONFLICT, "ASYNC_RECONCILE", "Redis 库存差异，请对账");
         }
     }
 
-    public void pause(long tierId) { redis.opsForValue().set(pauseKey(tierId), "1"); }
     private String stockKey(long tierId) { return "tf:async:tier:" + tierId + ":stock"; }
     private String quotaKey(long tierId, long userId) { return "tf:async:tier:" + tierId + ":user:" + userId; }
     private String tokenKey(long userId, String requestId) { return "tf:async:req:" + userId + ":" + requestId; }
     private String markerKey(long userId, String requestId) { return tokenKey(userId, requestId) + ":done"; }
     private String resultKey(long userId, String requestId) { return tokenKey(userId, requestId) + ":result"; }
-    private String pauseKey(long tierId) { return "tf:async:tier:" + tierId + ":paused"; }
 }

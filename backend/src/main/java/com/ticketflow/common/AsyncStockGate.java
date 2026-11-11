@@ -100,6 +100,16 @@ public class AsyncStockGate {
         return redis.opsForValue().get(resultKey(userId, requestId));
     }
 
+    /** 订单提交后短期保留轮询结果；重复消息可以刷新同一订单的缓存。 */
+    public void cacheOrderId(long userId, String requestId, long orderId) {
+        redis.opsForValue().set(orderResultKey(userId, requestId), String.valueOf(orderId), Duration.ofMinutes(30));
+    }
+
+    public Long orderId(long userId, String requestId) {
+        String value = redis.opsForValue().get(orderResultKey(userId, requestId));
+        return value == null ? null : Long.valueOf(value);
+    }
+
     public boolean ready(long tierId) {
         return Boolean.TRUE.equals(redis.hasKey(stockKey(tierId)));
     }
@@ -119,4 +129,5 @@ public class AsyncStockGate {
     private String tokenKey(long userId, String requestId) { return "tf:async:req:" + userId + ":" + requestId; }
     private String markerKey(long userId, String requestId) { return tokenKey(userId, requestId) + ":done"; }
     private String resultKey(long userId, String requestId) { return tokenKey(userId, requestId) + ":result"; }
+    private String orderResultKey(long userId, String requestId) { return tokenKey(userId, requestId) + ":order"; }
 }

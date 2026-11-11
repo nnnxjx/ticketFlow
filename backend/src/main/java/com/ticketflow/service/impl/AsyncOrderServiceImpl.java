@@ -77,10 +77,10 @@ public class AsyncOrderServiceImpl implements IAsyncOrderService {
     @Override
     public AsyncOrderView status(String requestId) {
         long userId = UserContext.getUserId();
-        OrderEntity order = findOrder(userId, requestId);
-        if (order != null) return new AsyncOrderView(requestId, "ORDERED", order.getId(), null);
+        Long orderId = stockGate.orderId(userId, requestId);
+        if (orderId != null) return new AsyncOrderView(requestId, "ORDERED", orderId, null);
         String failure = stockGate.failureCode(userId, requestId);
-        if (failure != null) return rejected(userId, requestId, failure);
+        if (failure != null) return new AsyncOrderView(requestId, "REJECTED", null, failure);
         if (stockGate.hasToken(userId, requestId)) return new AsyncOrderView(requestId, "PROCESSING", null, null);
         if (stockGate.wasReleased(userId, requestId)) return rejected(userId, requestId, "REQUEST_REJECTED");
         return new AsyncOrderView(requestId, "UNKNOWN", null, null);
@@ -101,6 +101,8 @@ public class AsyncOrderServiceImpl implements IAsyncOrderService {
         if (existing != null) {
             //做一下判断同一次请求的参数是否一致
             ordered(existing, tierId, quantity);
+            stockGate.cacheOrderId(userId, requestId, existing.getId());
+            stockGate.confirm(userId, requestId, tierId);
             return;
         }
         // 请求侧发布失败后可能已释放令牌；这种迟到消息不能再建单。
@@ -112,6 +114,8 @@ public class AsyncOrderServiceImpl implements IAsyncOrderService {
             if (stockGate.release(userId, requestId, tierId)) stockGate.markRejected(userId, requestId, ex.code());
             return;
         }
+        // MySQL 事务已提交；先让轮询看到订单，再清理预占令牌。
+        stockGate.cacheOrderId(userId, requestId, orderId);
         stockGate.confirm(userId, requestId, tierId);
         log.debug("Async order created: {}", orderId);
     }

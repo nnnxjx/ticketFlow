@@ -12,7 +12,6 @@ export function PurchasePanel() {
     seats,
     chosen,
     setChosen,
-    pending,
     busy,
     refreshSeats,
     buyGeneral,
@@ -64,20 +63,12 @@ export function PurchasePanel() {
             <strong>{price(Number(currentTier?.price || 0) * quantity)}</strong>
             <button
               className="primary"
-              disabled={busy || !tierId || pending?.status === "PROCESSING"}
+              disabled={busy || !tierId}
               onClick={() => void buyGeneral()}
             >
               立即抢票
             </button>
           </div>
-          {pending?.status === "PROCESSING" && (
-            <div className="pending">
-              正在创建订单 · {pending.requestId}
-              <button onClick={() => void buyGeneral(true)}>
-                重新发送同一请求
-              </button>
-            </div>
-          )}
         </>
       ) : (
         <>

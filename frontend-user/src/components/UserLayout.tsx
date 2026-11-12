@@ -4,6 +4,7 @@ import { AuthPanel } from "./AuthPanel";
 import { DiscoverPage } from "./DiscoverPage";
 import { OrdersPage } from "./OrdersPage";
 import { Toast } from "./Toast";
+import { OrderProcessingPage } from "./OrderProcessingPage";
 import { Link, Route, Routes, useLocation } from "react-router";
 import { useEffect } from "react";
 
@@ -67,6 +68,7 @@ export function UserLayout() {
           <Route path="/" element={<DiscoverPage />} />
           <Route path="/events/:eventId" element={<DiscoverPage />} />
           <Route path="/orders" element={<OrdersPage />} />
+          <Route path="/orders/processing/:requestId" element={<OrderProcessingPage />} />
           <Route path="*" element={<div className="empty">页面不存在。<Link to="/">返回演出列表</Link></div>} />
         </Routes>
       </main>

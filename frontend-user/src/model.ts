@@ -12,6 +12,7 @@ import type {
 import { labels } from "./format";
 import { tokenKey, api } from "./api";
 import { useNavigate } from "react-router";
+import { readAttempts, writeAttempts, type PurchaseAttempt } from "./purchaseAttempts";
 export type {
   Id,
   Show,
@@ -51,10 +52,8 @@ export function useUserModel() {
   const [order, setOrder] = useState<Order | null>(null);
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [pending, setPending] = useState<AsyncResult | null>(null);
-  const [pendingTier, setPendingTier] = useState<{
-    id: Id;
-    quantity: number;
-  } | null>(null);
+  const [activeAttempt, setActiveAttempt] = useState<PurchaseAttempt | null>(null);
+  const [purchaseAttempts, setPurchaseAttempts] = useState<PurchaseAttempt[]>(() => readAttempts(localStorage.getItem(tokenKey) || ""));
   const [assignedAttempt, setAssignedAttempt] = useState<{
     requestId: string;
     sessionId: Id;
@@ -119,34 +118,17 @@ export function useUserModel() {
       stream.close();
     };
   }, [session?.id, session?.saleMode]);
-  useEffect(() => {
-    if (pending?.status !== "PROCESSING") return;
-    let active = true;
-    const check = async () => {
-      try {
-        const x = await api<AsyncResult>(
-          `/orders/general/async/${encodeURIComponent(pending.requestId)}`,
-        );
-        if (!active) return;
-        setPending(x);
-        if (x.status === "ORDERED" && x.orderId) {
-          await openOrder(x.orderId);
-          await listOrders(1);
-          setTab("orders");
-          setNotice("订单已创建，请及时支付");
-        } else if (x.status === "REJECTED")
-          setNotice(labels[x.failureCode || ""] || x.failureCode || "下单失败");
-      } catch (e) {
-        if (active) setNotice((e as Error).message);
-      }
-    };
-    void check();
-    const id = window.setInterval(check, 2500);
-    return () => {
-      active = false;
-      window.clearInterval(id);
-    };
-  }, [pending?.requestId, pending?.status]);
+  useEffect(() => { setPurchaseAttempts(readAttempts(token)); }, [token]);
+  function saveAttempt(attempt: PurchaseAttempt) {
+    const next = [...readAttempts(token).filter((x) => x.requestId !== attempt.requestId), attempt];
+    writeAttempts(token, next);
+    setPurchaseAttempts(next);
+  }
+  function removeAttempts(ids: string[]) {
+    const next = readAttempts(token).filter((x) => !ids.includes(x.requestId));
+    writeAttempts(token, next);
+    setPurchaseAttempts(next);
+  }
   async function run(task: () => Promise<void>) {
     setBusy(true);
     setNotice("");
@@ -226,32 +208,28 @@ export function useUserModel() {
         : [],
     );
   }
-  // 异步建单期间保留 requestId，用户重发时仍查询同一次 Redis 预占。
-  async function buyGeneral(retry = false) {
+  async function buyGeneral() {
     if (!token) {
       setNotice("请先登录");
       return;
     }
-    const id = retry ? pendingTier?.id : tierId;
-    const count = retry ? pendingTier?.quantity : quantity;
+    const id = tierId;
+    const count = quantity;
     if (!id || !count) return;
     await run(async () => {
       const x = await api<AsyncResult>("/orders/general", "POST", {
-        requestId: retry && pending ? pending.requestId : crypto.randomUUID(),
+        requestId: crypto.randomUUID(),
         tierId: id,
         quantity: count,
       });
       setPending(x);
-      setPendingTier({ id, quantity: count });
       if (x.status === "ORDERED" && x.orderId) {
         await openOrder(x.orderId);
         setTab("orders");
-      } else
-        setNotice(
-          x.status === "REJECTED"
-            ? labels[x.failureCode || ""] || x.failureCode || "下单失败"
-            : "正在创建订单，请稍候",
-        );
+      } else if (x.status === "PROCESSING") {
+        setActiveAttempt({ requestId: x.requestId, tierId: id, tierName: currentTier?.name || `票档 #${id}`, quantity: count, createdAt: Date.now() });
+        navigate(`/orders/processing/${encodeURIComponent(x.requestId)}`);
+      } else setNotice(labels[x.failureCode || ""] || x.failureCode || "下单失败");
     });
   }
   // 网络失败后同一组选座沿用 requestId，避免后端已锁座而前端又生成一笔新订单。
@@ -350,8 +328,11 @@ export function useUserModel() {
     setTickets,
     pending,
     setPending,
-    pendingTier,
-    setPendingTier,
+    activeAttempt,
+    setActiveAttempt,
+    purchaseAttempts,
+    saveAttempt,
+    removeAttempts,
     assignedAttempt,
     setAssignedAttempt,
     busy,

@@ -17,6 +17,7 @@ backend/src/main/resources/application-local.yaml
 *.iml
 *.log
 logs/
+perf-output/
 *.pid
 .DS_Store
 Thumbs.db

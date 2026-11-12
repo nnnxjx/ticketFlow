@@ -2,8 +2,18 @@ import { useUserContext } from "../context";
 import { price, when, labels, api } from "../model";
 import { QrTicket } from "./QrTicket";
 import type { Ticket } from "../model";
+import type { AsyncResult } from "../model";
+import type { PurchaseAttempt } from "../purchaseAttempts";
+import { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router";
+
+type AttemptSummary = { attempt: PurchaseAttempt; result?: AsyncResult; error?: string };
 
 export function OrdersPage() {
+  const navigate = useNavigate();
+  const [summary, setSummary] = useState<AttemptSummary[] | null>(null);
+  const [loadingAttempts, setLoadingAttempts] = useState(false);
+  const checkedOnEntry = useRef(false);
   const {
     token,
     orders,
@@ -19,9 +29,52 @@ export function OrdersPage() {
     openOrder,
     act,
     remaining,
+    purchaseAttempts,
+    removeAttempts,
   } = useUserContext();
+  useEffect(() => {
+    if (!token || !purchaseAttempts.length || checkedOnEntry.current) return;
+    checkedOnEntry.current = true;
+    let active = true;
+    let completed = false;
+    setLoadingAttempts(true);
+    void Promise.all(purchaseAttempts.map(async (attempt): Promise<AttemptSummary> => {
+      try {
+        return { attempt, result: await api<AsyncResult>(`/orders/general/async/${encodeURIComponent(attempt.requestId)}`) };
+      } catch (error) {
+        return { attempt, error: (error as Error).message };
+      }
+    })).then((items) => { if (active) { completed = true; setSummary(items); } })
+      .finally(() => { if (active) setLoadingAttempts(false); });
+    return () => { active = false; if (!completed) checkedOnEntry.current = false; };
+  }, [token, purchaseAttempts]);
+
+  function closeSummary() {
+    if (summary) removeAttempts(summary.filter((x) => x.result && x.result.status !== "PROCESSING")
+      .map((x) => x.attempt.requestId));
+    setSummary(null);
+  }
   return (
     <section className="section">
+      {summary && <div className="modal-backdrop" role="presentation">
+        <div className="result-modal" role="dialog" aria-modal="true" aria-labelledby="attempt-summary-title">
+          <h3 id="attempt-summary-title">购票请求结果</h3>
+          <p>离开等待页后的购票请求，当前结果如下：</p>
+          {summary.map(({ attempt, result, error }) => <div className="result-row" key={attempt.requestId}>
+            <span><b>{attempt.tierName} · {attempt.quantity} 张</b><small>{attempt.requestId}</small></span>
+            <span>{error ? `查询失败：${error}` : result?.status === "ORDERED" ? "订单已创建" : result?.status === "REJECTED"
+              ? labels[result.failureCode || ""] || result.failureCode || "下单失败"
+              : result?.status === "UNKNOWN" ? "暂未查到结果" : "仍在处理中"}</span>
+            {result?.status === "ORDERED" && result.orderId && <button className="secondary" onClick={() => {
+              closeSummary(); void run(() => openOrder(result.orderId!));
+            }}>查看订单并支付</button>}
+            {result?.status === "PROCESSING" && <button className="secondary" onClick={() => {
+              closeSummary(); navigate(`/orders/processing/${encodeURIComponent(attempt.requestId)}`);
+            }}>继续等待</button>}
+          </div>)}
+          <button className="primary" onClick={closeSummary}>知道了</button>
+        </div>
+      </div>}
       <div className="section-title">
         <div>
           <span className="eyebrow">YOUR ORDERS</span>
@@ -161,6 +214,7 @@ export function OrdersPage() {
           </div>
         </div>
       )}
+      {loadingAttempts && <span className="sr-only" role="status">正在查询购票请求</span>}
     </section>
   );
 }

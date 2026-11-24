@@ -6,6 +6,7 @@ import com.ticketflow.common.Ids;
 import com.ticketflow.dto.session.SessionRequest;
 import com.ticketflow.entity.event.EventEntity;
 import com.ticketflow.entity.session.SessionEntity;
+import com.ticketflow.entity.venue.VenueEntity;
 import com.ticketflow.entity.tier.TierEntity;
 import com.ticketflow.entity.seat.SessionSeatEntity;
 import com.ticketflow.mapper.session.SessionMapper;
@@ -74,6 +75,37 @@ class SessionServiceImplTest {
 
         verify(tiers).delete((Wrapper<TierEntity>) any(Wrapper.class));
         verify(seats).delete((Wrapper<SessionSeatEntity>) any(Wrapper.class));
+    }
+
+    @Test
+    void checkinCannotStartAtOrAfterPerformanceStart() {
+        SessionRequest request = validRequest();
+        for (int minutes : new int[]{0, 1}) {
+            request.setCheckinStart(request.getStartTime().plusMinutes(minutes));
+            AppException ex = assertThrows(AppException.class, () -> service.create(10L, request));
+            assertEquals("INVALID_ARGUMENT", ex.code());
+            assertEquals("检票开始时间必须早于场次开始时间", ex.getMessage());
+        }
+        verify(mapper, never()).insert(any(SessionEntity.class));
+    }
+
+    @Test
+    void sellingMayOverlapCheckinAndEndAtPerformanceStart() {
+        SessionRequest request = validRequest();
+        request.setVenueId(30L);
+        request.setSaleEnd(request.getStartTime());
+        request.setCheckinStart(request.getStartTime().minusMinutes(1));
+        request.setCheckinEnd(request.getEndTime());
+        VenueEntity venue = new VenueEntity();
+        venue.setOrganizerId(20L);
+        when(access.venueOwned(30L)).thenReturn(venue);
+        when(mapper.insert(any(SessionEntity.class))).thenReturn(1);
+
+        service.create(10L, request);
+
+        verify(mapper).insert(argThat((SessionEntity saved) ->
+                saved.getSaleEnd().equals(request.getStartTime())
+                        && saved.getCheckinEnd().equals(request.getEndTime())));
     }
 
     private SessionRequest validRequest() {

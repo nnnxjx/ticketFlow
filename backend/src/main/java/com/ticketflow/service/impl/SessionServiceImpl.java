@@ -126,6 +126,10 @@ public class SessionServiceImpl extends ServiceImpl<SessionMapper, SessionEntity
     }
 
     private void fill(SessionEntity session, SessionRequest request, EventEntity event) {
+        // 提前开放检票；售票与检票可重叠，检票结束可晚于开场以接纳迟到观众。
+        if (!request.getCheckinStart().isBefore(request.getStartTime())) {
+            throw CatalogAccess.invalid("检票开始时间必须早于场次开始时间");
+        }
         // 场次销售、演出及检票时间均使用 UTC，避免跨时区比较歧义。
         if (!request.getSaleStart().isBefore(request.getSaleEnd()) || request.getSaleEnd().isAfter(request.getStartTime())
                 || !request.getStartTime().isBefore(request.getEndTime()) || !request.getCheckinStart().isBefore(request.getCheckinEnd())

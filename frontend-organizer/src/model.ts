@@ -260,6 +260,20 @@ export function useOrganizerModel() {
     e.preventDefault();
     if (!show || !sessionForm.venueId) return;
     await run(async () => {
+      // 比较实际时间，提前拦截不合法配置；后端仍执行最终校验。
+      const saleStart = new Date(sessionForm.saleStart).getTime();
+      const saleEnd = new Date(sessionForm.saleEnd).getTime();
+      const start = new Date(sessionForm.startTime).getTime();
+      const end = new Date(sessionForm.endTime).getTime();
+      const checkinStart = new Date(sessionForm.checkinStart).getTime();
+      const checkinEnd = new Date(sessionForm.checkinEnd).getTime();
+      if (!(checkinStart < start)) {
+        throw new Error("检票开始时间必须早于场次开始时间");
+      }
+      if (!(saleStart < saleEnd && saleEnd <= start && start < end
+        && checkinStart < checkinEnd && checkinEnd <= end)) {
+        throw new Error("请检查时间：开售早于停售，停售不晚于开场；演出及检票开始早于结束，检票结束不晚于散场");
+      }
       const body = {
         ...sessionForm,
         saleStart: toUtc(sessionForm.saleStart),

@@ -142,6 +142,7 @@ export function SessionEditorPanel() {
             <button className="primary" disabled={busy}>
               保存场次
             </button>
+            <p className="muted">停售不晚于开场，检票开始必须早于开场，检票结束不晚于散场；售票与检票可同时进行。</p>
           </form>
           {session && (
             <>
